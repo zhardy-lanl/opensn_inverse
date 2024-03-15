@@ -1,0 +1,10 @@
+# output files
+*.pvtu
+*.vtu
+
+# build files
+build
+cmake-build-debug
+
+# auxiliary files
+.idea
