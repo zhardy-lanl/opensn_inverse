@@ -1,6 +1,8 @@
 # output files
 *.pvtu
 *.vtu
+*.pdf
+*.txt
 
 # build files
 build
