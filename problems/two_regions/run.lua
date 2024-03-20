@@ -18,7 +18,7 @@ dz = Z / N_z
 if src == nil then src = 10.0 end
 if alpha == nil then alpha = 100.0 end
 if maxit == nil then maxit = 250 end
-if tol == nil then tol = 1.0e-8 end
+if tol == nil then tol = 1.0e-12 end
 
 num_groups = 1
 
@@ -88,7 +88,7 @@ PhysicsMaterialSetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs
 
 -- Setup physics
 if dim == 1 then quad = CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 8, 2)
+else quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 end
 
 boundary_conditions = {

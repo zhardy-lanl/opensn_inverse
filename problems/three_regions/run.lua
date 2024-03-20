@@ -13,7 +13,7 @@ dy = Y / N_y
 if src == nil then src = 10.0 end
 if alpha == nil then alpha = 1000.0 end
 if maxit == nil then maxit = 250 end
-if tol == nil then tol = 1.0e-8 end
+if tol == nil then tol = 1.0e-12 end
 
 num_groups = 1
 
@@ -77,7 +77,7 @@ PhysicsMaterialAddProperty(materials[3], TRANSPORT_XSECTIONS)
 PhysicsMaterialSetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, micro_xs[3])
 
 -- Setup physics
-quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 8, 2)
+quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 
 boundary_conditions = {
     {
