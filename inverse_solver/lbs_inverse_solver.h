@@ -63,12 +63,6 @@ private:
    */
   void Solve() const;
 
-  /**
-   * Check whether the problem has converged using the relative change in
-   * densities from the previous iteration.
-   */
-  static double ComputeCovergenceCriteria(const std::vector<double>& rho);
-
 private:
   DiscreteOrdinatesSolver& solver_;
   ParameterBlock bc_options_;

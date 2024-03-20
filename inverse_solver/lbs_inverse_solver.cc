@@ -116,6 +116,9 @@ InverseSolver::Execute()
     std::dynamic_pointer_cast<SingleStateMGXS>(xs)->SetScalingFactor(densities_[i]);
   }
 
+  // Define the convergence normalization
+  const auto norm = std::accumulate(ref_leakage_.begin(), ref_leakage_.end(), 0.0);
+
   // Start iterations
   double f, dphi, dphi_ell;
   double alpha, alpha_ell = alpha_max_;
@@ -147,6 +150,7 @@ InverseSolver::Execute()
 
     ss << "Iteration: " << std::setw(4) << std::left << nit << "    ";
     ss << "Obj Func: " << std::left << std::setw(12) << f << "    ";
+    ss << "Conv:  " << std::left << std::setw(12) << f / norm << "    ";
     ss << "Alpha: " << std::left << std::setw(12) << alpha << "    ";
     ss << "Densities: [";
     for (int i = 0; i < densities_.size() - 1; ++i)
@@ -154,7 +158,7 @@ InverseSolver::Execute()
     ss << densities_.back() << "]" << (f < tolerance_ ? "  CONVERGED" : "");
     log.Log() << ss.str();
 
-    if (f < tolerance_)
+    if (f / norm < tolerance_)
       break;
   }
 }
@@ -319,7 +323,7 @@ InverseSolver::BacktrackingLineSearch(const double alpha0,
 
     // If sufficient decrease, exit the routine
     if (f0 - f >= alpha * t)
-      return alpha;
+      break;
 
     // Otherwise, scale alpha down
     alpha *= 0.5;
@@ -355,6 +359,9 @@ InverseSolver::UpdateDensities(const double alpha, const std::vector<double>& dr
     auto update = alpha * drho[i];
     if (densities_[i] + update < 0.0)
       update = densities_[i] - 1.0e-6;
+    if (std::fabs(update) > 0.1 * densities_[i])
+      update = (update > 0.0 ? 0.1 : -0.1) * densities_[i];
+
     rho.push_back(densities_[i] + update);
 
     // Set material properties for new density
@@ -362,13 +369,6 @@ InverseSolver::UpdateDensities(const double alpha, const std::vector<double>& dr
     std::dynamic_pointer_cast<SingleStateMGXS>(xs)->SetScalingFactor(rho[i]);
   }
   return rho;
-}
-
-double
-InverseSolver::ComputeCovergenceCriteria(const std::vector<double>& updates)
-{
-  auto f = [](double sum, double x) { return sum + x * x; };
-  return std::sqrt(std::accumulate(updates.begin(), updates.end(), 0.0, f));
 }
 
 void
