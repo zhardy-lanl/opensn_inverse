@@ -73,7 +73,7 @@ PhysicsTransportXSSet(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
 
 macro_xs = {}
 macro_xs[1] = PhysicsTransportXSMakeCombined({ { micro_xs[1], 1.0 } })
-macro_xs[2] = PhysicsTransportXSMakeCombined({ { micro_xs[2], 2.0 } })
+macro_xs[2] = PhysicsTransportXSMakeCombined({ { micro_xs[2], 5.0 } })
 
 -- Create materials
 materials = {}
@@ -124,15 +124,16 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax", "ymin" },
     initial_guess = {
-        material_ids = { 1 },
-        values = { 2.2 }
+        material_ids = { 0, 1 },
+        values = { 1.5, 4.5 }
     },
     boundary_conditions = boundary_conditions,
     alpha = alpha,
     max_iterations = maxit,
     tolerance = tol,
+    line_search = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 SolverInitialize(inv_solver)
