@@ -78,6 +78,8 @@ private:
 
   const unsigned int max_iterations_;
   const double tolerance_;
+
+  const bool line_search_;
 };
 
 std::map<std::string, uint64_t> InverseSolver::boundary_map_ = {

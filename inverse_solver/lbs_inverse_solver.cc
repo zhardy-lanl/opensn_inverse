@@ -47,6 +47,8 @@ InverseSolver::GetInputParameters()
   params.AddOptionalParameter(
     "tolerance", 1.0e-6, "The convergence tolerance for the density reconstruction.");
 
+  params.AddOptionalParameter("line_search", true, "A flag for using a line search algorithm.");
+
   return params;
 }
 
@@ -58,7 +60,8 @@ InverseSolver::InverseSolver(const InputParameters& params)
     detector_boundaries_(params.GetParamVectorValue<std::string>("detector_boundaries")),
     alpha_max_(params.GetParamValue<double>("alpha")),
     max_iterations_(params.GetParamValue<unsigned int>("max_iterations")),
-    tolerance_(params.GetParamValue<double>("tolerance"))
+    tolerance_(params.GetParamValue<double>("tolerance")),
+    line_search_(params.GetParamValue<bool>("line_search"))
 {
   // Check boundary condition options
   bc_options_.RequireBlockTypeIs(ParameterBlockType::ARRAY);
@@ -129,13 +132,20 @@ InverseSolver::Execute()
     f = EvaluateObjective();
     df = p = EvaluateGradient();
 
-    std::transform(df.begin(), df.end(), p.begin(), std::negate{});
-    dphi = std::inner_product(df.begin(), df.end(), p.begin(), 0.0);
+    if (line_search_)
+    {
+      std::transform(df.begin(), df.end(), p.begin(), std::negate{});
+      dphi = std::inner_product(df.begin(), df.end(), p.begin(), 0.0);
 
-    auto alpha0 = (nit == 0) ? alpha_max_ : alpha_ell * dphi_ell / dphi;
-    alpha0 = std::min(alpha_max_, alpha0);
-    alpha = BacktrackingLineSearch(alpha0, f, df, p);
-
+      auto alpha0 = (nit == 0) ? alpha_max_ : alpha_ell * dphi_ell / dphi;
+      alpha0 = std::min(alpha_max_, alpha0);
+      alpha = BacktrackingLineSearch(alpha0, f, df, p);
+    }
+    else
+    {
+      alpha = alpha_max_;
+    }
+    
     // Update for next iteration
     densities_ = UpdateDensities(alpha, df);
     dphi_ell = dphi;
@@ -155,7 +165,7 @@ InverseSolver::Execute()
     ss << "Densities: [";
     for (int i = 0; i < densities_.size() - 1; ++i)
       ss << densities_[i] << " ";
-    ss << densities_.back() << "]" << (f < tolerance_ ? "  CONVERGED" : "");
+    ss << densities_.back() << "]" << (f / norm < tolerance_ ? "  CONVERGED" : "");
     log.Log() << ss.str();
 
     if (f / norm < tolerance_)
@@ -328,7 +338,7 @@ InverseSolver::BacktrackingLineSearch(const double alpha0,
     // Otherwise, scale alpha down
     alpha *= 0.5;
   }
-  return std::max(alpha, 1.0e-6);
+  return std::max(alpha, 0.001);
 }
 
 std::vector<double>
