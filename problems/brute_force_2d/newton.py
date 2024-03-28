@@ -2,7 +2,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 path = os.path.abspath(os.path.dirname(__file__))
 
 data = np.loadtxt(f"{path}/data.txt")
@@ -14,7 +13,7 @@ def f(x):
         idx = np.searchsorted(X, x)
         x_low, y_low = X[idx], Y[idx]
         return y_low + df(x) * (x - x_low)
-    elif isinstance(x, (list, np.ndarry)):
+    elif isinstance(x, (list, np.ndarray)):
         return np.array([f(xi) for xi in x])
     else:
         TypeError()
@@ -27,7 +26,7 @@ def df(x):
         y_low, y_high = Y[idx], Y[idx + 1]
         dx, dy = x_high - x_low, y_high - y_low
         return dy / dx
-    elif isinstance(x, (list,np.ndarray)):
+    elif isinstance(x, (list, np.ndarray)):
         return np.array([df(xi) for xi in x])
     else:
         TypeError()
@@ -72,5 +71,3 @@ plt.tight_layout()
 plt.legend()
 plt.savefig(f"{path}/newtons_method.pdf")
 plt.show()
-
-

@@ -25,16 +25,16 @@ mesh.MeshGenerator.Execute(orthomesh)
 mesh.SetUniformMaterialID(0)
 
 -- Create cross sections
-micro_xs = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs, SIMPLEXS1, num_groups, 1.0, 0.25)
+micro_xs = xs.Create()
+xs.Set(micro_xs, SIMPLEXS1, num_groups, 1.0, 0.25)
 
 -- Create materials
 materials = {}
-materials[1] = PhysicsAddMaterial("Background")
-PhysicsMaterialAddProperty(materials[1], TRANSPORT_XSECTIONS)
+materials[1] = mat.AddMaterial("Background")
+mat.AddProperty(materials[1], TRANSPORT_XSECTIONS, micro_xs)
 
 -- Setup physics
-quad = CreateProductQuadrature(GAUSS_LEGENDRE, 16)
+quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
 
 lbs_block = {
     num_groups = num_groups,
@@ -63,15 +63,14 @@ lbs_block = {
 }
 
 -- Run reference
-xs_table = { { micro_xs, 1.0 } }
-macro_xs = PhysicsTransportXSMakeCombined(xs_table)
-PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
+macro_xs = xs.MakeCombined({ { micro_xs, 1.0 } })
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
-SolverInitialize(ss_solver)
-SolverExecute(ss_solver)
+solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
 
 leakage = lbs.ComputeLeakage(phys, { "zmax" })
 reference = leakage["zmax"][1]
@@ -85,14 +84,12 @@ for i = 1, num_runs do
     density = min_density + (i - 1) * drho
 
     -- Set the macroscopic cross sections
-    xs_table = { { micro_xs, density } }
-    macro_xs = PhysicsTransportXSMakeCombined(xs_table)
-    PhysicsMaterialSetProperty(
-            materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
+    macro_xs = xs.MakeCombined({ { micro_xs, density } })
+    mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
     -- Create the solver
-    SolverInitialize(ss_solver)
-    SolverExecute(ss_solver)
+    solver.Initialize(ss_solver)
+    solver.Execute(ss_solver)
 
     leakage = lbs.ComputeLeakage(phys, { "zmax" })["zmax"][1]
     F = 0.5 * (leakage - reference) ^ 2
