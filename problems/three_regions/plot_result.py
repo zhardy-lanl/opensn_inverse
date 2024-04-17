@@ -39,4 +39,5 @@ for i in range(len(densities)):
 
 plt.legend()
 plt.tight_layout()
+plt.savefig("conv.png")
 plt.show()

@@ -19,6 +19,7 @@ if src == nil then src = 10.0 end
 if alpha == nil then alpha = 100.0 end
 if maxit == nil then maxit = 250 end
 if tol == nil then tol = 1.0e-12 end
+if line_search == nil then line_search = true end
 
 num_groups = 1
 
@@ -50,22 +51,18 @@ mesh.MeshGenerator.Execute(orthomesh)
 mesh.SetUniformMaterialID(0)
 
 -- Create cross sections
-micro_xs = {}
-micro_xs[1] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[1], OPENSN_XSFILE, "fuel.xs")
-
-macro_xs = {}
-macro_xs[1] = PhysicsTransportXSMakeCombined({ { micro_xs[1], 2.0 } })
+micro_xs = xs.Create()
+xs.Set(micro_xs, OPENSN_XSFILE, "fuel.xs")
+xs.MakeCombined({ { micro_xs, 2.0 } })
 
 -- Create materials
-materials = {}
-materials[1] = PhysicsAddMaterial("Background")
-PhysicsMaterialAddProperty(materials[1], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+material = mat.AddMaterial("Fuel")
+mat.AddProperty(material, TRANSPORT_XSECTIONS)
+mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, micro_xs)
 
 -- Setup physics
-if dim == 1 then quad = CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
+else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 end
 
 boundary_conditions = {
@@ -101,7 +98,7 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "ymax" },
     initial_guess = {
         material_ids = { 0 },
         values = { 2.8 }
@@ -109,9 +106,10 @@ inverse_options = {
     boundary_conditions = boundary_conditions,
     alpha = alpha,
     max_iterations = maxit,
-    tolerance = tol
+    tolerance = tol,
+    line_search = line_search,
 }
 
 inv_solver = lbs.InverseSolver.Create(inverse_options)
-SolverInitialize(inv_solver)
-SolverExecute(inv_solver)
+solver.Initialize(inv_solver)
+solver.Execute(inv_solver)

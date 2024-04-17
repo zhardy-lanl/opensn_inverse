@@ -33,12 +33,12 @@ nodes = { x_nodes, y_nodes }
 orthomesh = mesh.OrthogonalMeshGenerator.Create({ node_sets = nodes })
 mesh.MeshGenerator.Execute(orthomesh)
 
-vol_heavy = mesh.RPPLogicalVolume.Create({ xmin = 0.2 * X, xmax = 0.4 * X,
-                                           ymin = 0.6 * Y, ymax = 0.8 * Y,
-                                           infz = true })
-vol_light = mesh.RPPLogicalVolume.Create({ xmin = 0.6 * X, xmax = 0.8 * X,
-                                           ymin = 0.2 * Y, ymax = 0.4 * Y,
-                                           infz = true })
+vol_heavy = logvol.RPPLogicalVolume.Create({ xmin = 0.2 * X, xmax = 0.4 * X,
+                                             ymin = 0.6 * Y, ymax = 0.8 * Y,
+                                             infz = true })
+vol_light = logvol.RPPLogicalVolume.Create({ xmin = 0.6 * X, xmax = 0.8 * X,
+                                             ymin = 0.2 * Y, ymax = 0.4 * Y,
+                                             infz = true })
 
 -- Material IDs
 mesh.SetUniformMaterialID(0)
@@ -47,37 +47,35 @@ mesh.SetMaterialIDFromLogicalVolume(vol_light, 2)
 
 -- Create cross sections
 micro_xs = {}
-micro_xs[1] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[1], OPENSN_XSFILE, "background.xs")
+micro_xs[1] = xs.Create()
+xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.MakeCombined({ { micro_xs[1], 1.0 } })
 
-micro_xs[2] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
+micro_xs[2] = xs.Create()
+xs.Set(micro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
+xs.MakeCombined({ { micro_xs[2], 5.0 } })
 
-micro_xs[3] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
-
-macro_xs = {}
-macro_xs[1] = PhysicsTransportXSMakeCombined({ { micro_xs[1], 1.0 } })
-macro_xs[2] = PhysicsTransportXSMakeCombined({ { micro_xs[2], 5.0 } })
-macro_xs[3] = PhysicsTransportXSMakeCombined({ { micro_xs[3], 2.0 } })
+micro_xs[3] = xs.Create()
+xs.Set(micro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
+xs.MakeCombined({ { micro_xs[3], 2.0 } })
 
 -- Create materials
 materials = {}
 
-materials[1] = PhysicsAddMaterial("Background")
-PhysicsMaterialAddProperty(materials[1], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+materials[1] = mat.AddMaterial("Background")
+mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
 
-materials[2] = PhysicsAddMaterial("Heavy Fuel")
-PhysicsMaterialAddProperty(materials[2], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+materials[2] = mat.AddMaterial("Heavy Fuel")
+mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
 
-materials[3] = PhysicsAddMaterial("Light Fuel")
-PhysicsMaterialAddProperty(materials[3], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, micro_xs[3])
+materials[3] = mat.AddMaterial("Light Fuel")
+mat.AddProperty(materials[3], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, micro_xs[3])
 
 -- Setup physics
-quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 
 boundary_conditions = {
     {
@@ -119,13 +117,14 @@ inverse_options = {
     boundary_conditions = boundary_conditions,
     alpha = alpha,
     max_iterations = maxit,
-    tolerance = tol
+    tolerance = tol,
+    line_search = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
-SolverInitialize(inv_solver)
-SolverExecute(inv_solver)
+solver.Initialize(inv_solver)
+solver.Execute(inv_solver)
 
 if master_export == nil then
-    ff_m0 = GetFieldFunctionHandleByName("phi_g000_m00")
-    ExportMultiFieldFunctionToVTK({ ff_m0 }, "ZPhi_LBS")
+    ff_m0 = fieldfunc.GetHandleByName("phi_g000_m00")
+    fieldfunc.ExportToVTKMulti({ ff_m0 }, "ZPhi_LBS")
 end

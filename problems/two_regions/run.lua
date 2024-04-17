@@ -47,16 +47,16 @@ orthomesh = mesh.OrthogonalMeshGenerator.Create({ node_sets = nodes })
 mesh.MeshGenerator.Execute(orthomesh)
 
 if dim == 1 then
-    vol = mesh.RPPLogicalVolume.Create({ infx = true, infy = true,
-                                         zmin = 0.5 * X, zmax = X })
+    vol = logvol.RPPLogicalVolume.Create({ infx = true, infy = true,
+                                           zmin = 0.5 * X, zmax = X })
 elseif dim == 2 then
-    vol = mesh.RPPLogicalVolume.Create({ xmin = 0.4 * X, xmax = 0.6 * X,
-                                         ymin = 0.2 * Y, ymax = 0.4 * Y,
-                                         infz = true })
+    vol = logvol.RPPLogicalVolume.Create({ xmin = 0.4 * X, xmax = 0.6 * X,
+                                           ymin = 0.4 * Y, ymax = 0.6 * Y,
+                                           infz = true })
 else
-    vol = mesh.RPPLogicalVolume.Create({ xmin = 0.25 * X, xmax = 0.5 * X,
-                                         ymin = 0.5 * Y, ymax = 0.75 * Y,
-                                         zmin = 0.25 * Z, zmax = 0.75 * Z })
+    vol = logvol.RPPLogicalVolume.Create({ xmin = 0.25 * X, xmax = 0.5 * X,
+                                           ymin = 0.5 * Y, ymax = 0.75 * Y,
+                                           zmin = 0.25 * Z, zmax = 0.75 * Z })
 end
 
 -- Material IDs
@@ -65,30 +65,28 @@ mesh.SetMaterialIDFromLogicalVolume(vol, 1)
 
 -- Create cross sections
 micro_xs = {}
-micro_xs[1] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[1], OPENSN_XSFILE, "background.xs")
+micro_xs[1] = xs.Create()
+xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.MakeCombined({ { micro_xs[1], 1.0 } })
 
-micro_xs[2] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
-
-macro_xs = {}
-macro_xs[1] = PhysicsTransportXSMakeCombined({ { micro_xs[1], 1.0 } })
-macro_xs[2] = PhysicsTransportXSMakeCombined({ { micro_xs[2], 5.0 } })
+micro_xs[2] = xs.Create()
+xs.Set(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
+xs.MakeCombined({ { micro_xs[2], 5.0 } })
 
 -- Create materials
 materials = {}
 
-materials[1] = PhysicsAddMaterial("Background")
-PhysicsMaterialAddProperty(materials[1], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+materials[1] = mat.AddMaterial("Background")
+mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
 
-materials[2] = PhysicsAddMaterial("Target")
-PhysicsMaterialAddProperty(materials[2], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+materials[2] = mat.AddMaterial("Fuel")
+mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
 
 -- Setup physics
-if dim == 1 then quad = CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
+else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 end
 
 boundary_conditions = {
@@ -124,10 +122,10 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax", "ymin" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "ymax" },
     initial_guess = {
-        material_ids = { 0, 1 },
-        values = { 1.5, 4.5 }
+        material_ids = { 1 },
+        values = { 4.5 }
     },
     boundary_conditions = boundary_conditions,
     alpha = alpha,
@@ -136,5 +134,5 @@ inverse_options = {
     line_search = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
-SolverInitialize(inv_solver)
-SolverExecute(inv_solver)
+solver.Initialize(inv_solver)
+solver.Execute(inv_solver)

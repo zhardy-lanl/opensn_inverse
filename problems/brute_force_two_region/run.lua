@@ -7,9 +7,9 @@ if X == nil then X = 5.0 end
 if Y == nil then Y = 5.0 end
 if Z == nil then Z = 5.0 end
 
-if N_x == nil then N_x = 20 end
-if N_y == nil then N_y = 20 end
-if N_z == nil then N_z = 20 end
+if N_x == nil then N_x = 50 end
+if N_y == nil then N_y = 50 end
+if N_z == nil then N_z = 50 end
 
 dx = X / N_x
 dy = Y / N_y
@@ -19,8 +19,8 @@ if src == nil then src = 10.0 end
 
 num_groups = 1
 
-min_frac = 0.25
-max_frac = 4.0
+min_frac = 0.75
+max_frac = 1.25
 num_runs_per_dim = 21
 df = (max_frac - min_frac) / (num_runs_per_dim - 1)
 ref_densities = { 1.0, 5.0 }
@@ -50,12 +50,12 @@ orthomesh = mesh.OrthogonalMeshGenerator.Create({ node_sets = nodes })
 mesh.MeshGenerator.Execute(orthomesh)
 
 if dim == 1 then
-    vol = mesh.RPPLogicalVolume.Create({ infx = true, infy = true,
-                                         zmin = 0.5 * X, zmax = X })
+    vol = logvol.RPPLogicalVolume.Create({ infx = true, infy = true,
+                                           zmin = 0.5 * X, zmax = X })
 elseif dim == 2 then
-    vol = mesh.RPPLogicalVolume.Create({ xmin = 0.4 * X, xmax = 0.6 * X,
-                                         ymin = 0.2 * Y, ymax = 0.4 * Y,
-                                         infz = true })
+    vol = logvol.RPPLogicalVolume.Create({ xmin = 0.25 * X, xmax = 0.75 * X,
+                                           ymin = 0.25 * Y, ymax = 0.75 * Y,
+                                           infz = true })
 else
     vol = mesh.RPPLogicalVolume.Create({ xmin = 0.25 * X, xmax = 0.5 * X,
                                          ymin = 0.5 * Y, ymax = 0.75 * Y,
@@ -68,30 +68,30 @@ mesh.SetMaterialIDFromLogicalVolume(vol, 1)
 
 -- Create cross sections
 micro_xs = {}
-micro_xs[1] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[1], OPENSN_XSFILE, "background.xs")
+micro_xs[1] = xs.Create()
+xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
 
-micro_xs[2] = PhysicsTransportXSCreate()
-PhysicsTransportXSSet(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
+micro_xs[2] = xs.Create()
+xs.Set(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
 
 macro_xs = {}
-macro_xs[1] = PhysicsTransportXSMakeCombined({ { micro_xs[1], ref_densities[1] } })
-macro_xs[2] = PhysicsTransportXSMakeCombined({ { micro_xs[2], ref_densities[2] } })
+macro_xs[1] = xs.MakeCombined({ { micro_xs[1], ref_densities[1] } })
+macro_xs[2] = xs.MakeCombined({ { micro_xs[2], ref_densities[2] } })
 
 -- Create materials
 materials = {}
 
-materials[1] = PhysicsAddMaterial("Background")
-PhysicsMaterialAddProperty(materials[1], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+materials[1] = mat.AddMaterial("Background")
+mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
 
-materials[2] = PhysicsAddMaterial("Target")
-PhysicsMaterialAddProperty(materials[2], TRANSPORT_XSECTIONS)
-PhysicsMaterialSetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+materials[2] = mat.AddMaterial("Fuel")
+mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
 
 -- Setup physics
-if dim == 1 then quad = CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
+else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 end
 
 boundary_conditions = {
@@ -126,8 +126,8 @@ lbs_block = {
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
-SolverInitialize(ss_solver)
-SolverExecute(ss_solver)
+solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
 
 leakage = lbs.ComputeLeakage(phys, { "xmax" })
 reference = leakage["xmax"][1]
@@ -142,24 +142,20 @@ for i = 1, num_runs_per_dim do
     -- Scale the first material
     f_i = min_frac + (i - 1) * df
     rho_i = f_i * ref_densities[1]
-    xs_table = { { micro_xs[1], rho_i } }
-    macro_xs[1] = PhysicsTransportXSMakeCombined(xs_table)
-    PhysicsMaterialSetProperty(materials[1], TRANSPORT_XSECTIONS,
-                               EXISTING, macro_xs[1])
+    macro_xs[1] = xs.MakeCombined({ { micro_xs[1], rho_i } })
+    mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
     for j = 1, num_runs_per_dim do
 
         -- Scale the second material
         f_j = min_frac + (j - 1) * df
         rho_j = f_j * ref_densities[2]
-        xs_table = { { micro_xs[2], rho_j } }
-        macro_xs[2] = PhysicsTransportXSMakeCombined(xs_table)
-        PhysicsMaterialSetProperty(materials[2], TRANSPORT_XSECTIONS,
-                                   EXISTING, macro_xs[2])
+        macro_xs[2] = xs.MakeCombined({ { micro_xs[2], rho_j } })
+        mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
         -- Create the solver
-        SolverInitialize(ss_solver)
-        SolverExecute(ss_solver)
+        solver.Initialize(ss_solver)
+        solver.Execute(ss_solver)
 
         leakage = lbs.ComputeLeakage(phys, { "xmax" })["xmax"][1]
         obj_func = 0.5 * (leakage - reference) ^ 2
@@ -168,3 +164,8 @@ for i = 1, num_runs_per_dim do
     end
 end
 io.close(file)
+
+if master_export == nil then
+    ff_m0 = fieldfunc.GetHandleByName("phi_g000_m00")
+    fieldfunc.ExportToVTKMulti({ ff_m0 }, "ZPhi_LBS")
+end
