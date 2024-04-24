@@ -1,21 +1,15 @@
 #pragma once
 
-#include "opensn/framework/physics/solver_base/solver.h"
 #include "opensn/modules/linear_boltzmann_solvers/discrete_ordinates_solver/lbs_discrete_ordinates_solver.h"
 #include <vector>
 #include <map>
 #include <string>
 
-namespace opensn
-{
-namespace lbs
+namespace opensn::lbs
 {
 
 class InverseSolver : public opensn::Solver
 {
-private:
-  static std::map<std::string, uint64_t> boundary_map_;
-
 public:
   static InputParameters GetInputParameters();
   explicit InverseSolver(const InputParameters& params);
@@ -29,7 +23,6 @@ public:
   void Initialize() override;
   void Execute() override;
 
-private:
   /**
    * Evaluate the objective function for a given computed leakage.
    */
@@ -41,6 +34,7 @@ private:
    */
   std::vector<double> EvaluateGradient() const;
 
+private:
   double BacktrackingLineSearch(double alpha0,
                                 double f0,
                                 const std::vector<double>& df,
@@ -65,7 +59,7 @@ private:
 
 private:
   DiscreteOrdinatesSolver& solver_;
-  ParameterBlock bc_options_;
+  const ParameterBlock bc_options_;
 
   const std::vector<std::string> detector_boundaries_;
   std::vector<double> ref_leakage_;
@@ -82,8 +76,4 @@ private:
   const bool line_search_;
 };
 
-std::map<std::string, uint64_t> InverseSolver::boundary_map_ = {
-  {"xmax", 0}, {"xmin", 1}, {"ymax", 2}, {"ymin", 3}, {"zmax", 4}, {"zmin", 5}};
-
-} // namespace lbs
-} // namespace opensn
+} // namespace opensn::lbs

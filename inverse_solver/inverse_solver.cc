@@ -1,7 +1,7 @@
-#include "lbs_inverse_solver.h"
+#include "inverse_solver.h"
 #include "opensn/modules/linear_boltzmann_solvers/lbs_solver/iterative_methods/ags_linear_solver.h"
 #include "opensn/framework/mesh/mesh_continuum/mesh_continuum.h"
-#include "opensn/framework/physics/physics_material/multi_group_xs/single_state_mgxs.h"
+#include "opensn/framework/materials/multi_group_xs/multi_group_xs.h"
 #include "opensn/framework/logging/log.h"
 #include "opensn/framework/runtime.h"
 #include "opensn/framework/object_factory.h"
@@ -79,7 +79,7 @@ InverseSolver::InverseSolver(const InputParameters& params)
                        "The number of material IDs and values present in the initial guess "
                        "must be equivalent.");
 
-  log.Log() << "\n***** inverse_solver Initialized *****\n";
+  log.Log() << "\n***** inverse_solver constructed *****\n";
 }
 
 void
@@ -116,7 +116,7 @@ InverseSolver::Execute()
   for (int i = 0; i < material_ids_.size(); ++i)
   {
     auto& xs = solver_.GetMatID2XSMap().at(material_ids_[i]);
-    std::dynamic_pointer_cast<SingleStateMGXS>(xs)->SetScalingFactor(densities_[i]);
+    std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(densities_[i]);
   }
 
   // Define the convergence normalization
@@ -145,7 +145,7 @@ InverseSolver::Execute()
     {
       alpha = alpha_max_;
     }
-    
+
     // Update for next iteration
     densities_ = UpdateDensities(alpha, df);
     dphi_ell = dphi;
@@ -348,7 +348,7 @@ InverseSolver::ComputeDetectorSignal() const
   std::vector<uint64_t> bids;
   bids.reserve(detector_boundaries_.size());
   for (const auto& bname : detector_boundaries_)
-    bids.emplace_back(boundary_map_.at(bname));
+    bids.emplace_back(solver_.supported_boundary_names.at(bname));
   const auto leakage_map = solver_.ComputeLeakage(bids);
 
   // Format the leakage
@@ -376,7 +376,7 @@ InverseSolver::UpdateDensities(const double alpha, const std::vector<double>& dr
 
     // Set material properties for new density
     auto& xs = solver_.GetMatID2XSMap().at(material_ids_[i]);
-    std::dynamic_pointer_cast<SingleStateMGXS>(xs)->SetScalingFactor(rho[i]);
+    std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(rho[i]);
   }
   return rho;
 }
