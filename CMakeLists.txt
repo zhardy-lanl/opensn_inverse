@@ -17,6 +17,7 @@ include(CheckSymbolExists)
 find_package(MPI REQUIRED)
 find_package(OpenSn REQUIRED)
 find_package(Lua 5.4 REQUIRED)
+find_package(PETSc 3.17 REQUIRED)
 
 # libinverse
 file(GLOB_RECURSE LIBINVERSE_SRCS CONFIGURE_DEPENDS inverse_solver/*.cc)
@@ -30,6 +31,7 @@ target_include_directories(libinverse
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}
     ${OPENSN_INCLUDE_DIR}
+    ${PETSC_INCLUDE_DIR}
 )
 
 target_link_libraries(libinverse
@@ -37,6 +39,7 @@ target_link_libraries(libinverse
     opensn::libopensn
     opensn::libopensnlua
     PRIVATE
+    ${PETSC_LIBRARY}
     MPI::MPI_CXX
 )
 
