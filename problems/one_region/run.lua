@@ -15,10 +15,10 @@ dx = X / N_x
 dy = Y / N_y
 dz = Z / N_z
 
-if src == nil then src = 10.0 end
-if alpha == nil then alpha = 100.0 end
-if maxit == nil then maxit = 250 end
-if tol == nil then tol = 1.0e-12 end
+if src == nil then src = 1.0 end
+if alpha == nil then alpha = 1.0 end
+if maxit == nil then maxit = 100 end
+if tol == nil then tol = 1.0e-8 end
 if line_search == nil then line_search = true end
 
 num_groups = 1
@@ -65,7 +65,7 @@ if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
 else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 end
 
-boundary_conditions = {
+forward_bcs = {
     {
         name = dim == 1 and "zmin" or "xmin",
         type = "isotropic",
@@ -89,7 +89,7 @@ lbs_block = {
         scattering_order = 0,
         save_angular_flux = true,
         verbose_inner_iterations = false,
-        boundary_conditions = boundary_conditions,
+        boundary_conditions = forward_bcs,
     }
 }
 
@@ -99,14 +99,12 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = dim == 1 and { "zmax" } or { "ymax" },
-    initial_guess = {
-        material_ids = { 0 },
-        values = { 2.8 }
-    },
-    boundary_conditions = boundary_conditions,
+    material_ids = { 0 },
+    initial_guess = { 1.9 },
+    forward_bcs = forward_bcs,
+    max_its = maxit,
+    tol = tol,
     alpha = alpha,
-    max_iterations = maxit,
-    tolerance = tol,
     line_search = line_search,
 }
 

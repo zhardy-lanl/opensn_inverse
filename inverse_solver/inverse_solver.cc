@@ -1,4 +1,5 @@
 #include "inverse_solver.h"
+#include "opensn/modules/linear_boltzmann_solvers/discrete_ordinates_solver/lbs_discrete_ordinates_solver.h"
 #include "opensn/modules/linear_boltzmann_solvers/lbs_solver/iterative_methods/ags_linear_solver.h"
 #include "opensn/framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "opensn/framework/materials/multi_group_xs/multi_group_xs.h"
@@ -19,14 +20,11 @@ InverseSolver::GetInputParameters()
   auto params = Solver::GetInputParameters();
 
   params.SetGeneralDescription("An inverse solver for material density reconstruction.");
-
   params.ChangeExistingParamToOptional("name", "LBSInverseDataBlock");
 
-  params.AddRequiredParameter<size_t>("lbs_solver_handle",
-                                      "A handle to the solver used in the inverse problem.");
-
-  params.AddRequiredParameterArray(
-    "boundary_conditions", "A parameter block used to set the forward boundary conditions.");
+  params.AddRequiredParameter<size_t>("lbs_solver_handle", "A handle to an LBS solver.");
+  params.AddRequiredParameterArray("forward_bcs",
+                                   "A parameter block for forward boundary conditions.");
 
   params.AddRequiredParameterArray(
     "detector_boundaries",
@@ -34,20 +32,24 @@ InverseSolver::GetInputParameters()
     "minimization functional.The available boundary names are \"xmin\", \"xmax\", \"ymin\", "
     "\"ymax\", \"zmin\", and \"zmax\".");
 
-  params.AddRequiredParameterBlock(
-    "initial_guess",
-    "A table containing an array named \"material_ids\" containing the "
-    "material IDs to be reconstructed and an array named \"values\" "
-    "containing the initial guesses per material ID.");
-
-  params.AddOptionalParameter("alpha", 1.0, "The initial step size.");
-
-  params.AddOptionalParameter("max_iterations", 10, "The maximum number of iterations to take.");
-
   params.AddOptionalParameter(
-    "tolerance", 1.0e-6, "The convergence tolerance for the density reconstruction.");
+    "material_ids", std::vector<int>(), "The material IDs with unknown densities.");
+  params.AddOptionalParameter(
+    "initial_guess", std::vector<double>(), "An initial guess for material ID-based densities.");
+  params.AddOptionalParameter(
+    "initial_guess_file", "", "A file with the initial guess for cell-based densities.");
 
-  params.AddOptionalParameter("line_search", true, "A flag for using a line search algorithm.");
+  params.AddOptionalParameter("max_its", 20, "The maximum number of iterations.");
+  params.AddOptionalParameter("tol", 1.0e-8, "The convergence tolerance.");
+  params.AddOptionalParameter("alpha", 1.0, "The initial step size.");
+  params.AddOptionalParameter(
+    "line_search", false, "A flag for using a line search algorithm for step length selection.");
+  params.AddOptionalParameter("max_ls_its", 20, "The maximum number of line search iterations.");
+
+  params.ConstrainParameterRange("max_its", AllowableRangeLowLimit::New(1));
+  params.ConstrainParameterRange("tol", AllowableRangeLowLimit::New(1.0e-16));
+  params.ConstrainParameterRange("alpha", AllowableRangeLowHighLimit::New(1.0e-3, 1.0e6));
+  params.ConstrainParameterRange("max_ls_its", AllowableRangeLowLimit::New(1));
 
   return params;
 }
@@ -56,30 +58,43 @@ InverseSolver::InverseSolver(const InputParameters& params)
   : Solver(params),
     solver_(GetStackItem<DiscreteOrdinatesSolver>(
       object_stack, params.GetParamValue<size_t>("lbs_solver_handle"))),
-    bc_options_(params.GetParam("boundary_conditions")),
-    detector_boundaries_(params.GetParamVectorValue<std::string>("detector_boundaries")),
-    alpha_max_(params.GetParamValue<double>("alpha")),
-    max_iterations_(params.GetParamValue<unsigned int>("max_iterations")),
-    tolerance_(params.GetParamValue<double>("tolerance")),
-    line_search_(params.GetParamValue<bool>("line_search"))
+    forward_bcs_(params.GetParam("forward_bcs")),
+    detector_bndrys_(params.GetParamVectorValue<std::string>("detector_boundaries")),
+    num_func_evals_(0),
+    max_its_(params.GetParamValue<unsigned>("max_its")),
+    tol_(params.GetParamValue<double>("tol")),
+    alpha_(params.GetParamValue<double>("alpha")),
+    line_search_(params.GetParamValue<bool>("line_search")),
+    max_ls_its_(params.GetParamValue<unsigned>("max_ls_its"))
 {
+  const auto user_params = params.ParametersAtAssignment();
+
   // Check boundary condition options
-  bc_options_.RequireBlockTypeIs(ParameterBlockType::ARRAY);
+  forward_bcs_.RequireBlockTypeIs(ParameterBlockType::ARRAY);
 
-  // Get the initial density guess
-  auto guess_params = params.GetParam("initial_guess");
+  // Material ID-based problem
+  if (user_params.Has("material_ids"))
+  {
+    user_params.RequireParameter("initial_guess");
+    material_ids_ = user_params.GetParamVectorValue<int>("material_ids");
+    const auto initial_guess = user_params.GetParamVectorValue<double>("initial_guess");
+    OpenSnLogicalErrorIf(initial_guess.size() != material_ids_.size(),
+                         "The initial guess must have the same number of entries as the "
+                         "specified material IDs.");
 
-  guess_params.RequireParameter("material_ids");
-  material_ids_ = guess_params.GetParamVectorValue<int>("material_ids");
+    // Set the initial guess
+    VecCreate(opensn::mpi_comm, &x_);
+    VecSetType(x_, VECSTANDARD);
+    VecSetSizes(x_, material_ids_.size(), PETSC_DECIDE);
 
-  guess_params.RequireParameter("values");
-  densities_ = guess_params.GetParamVectorValue<double>("values");
-
-  OpenSnLogicalErrorIf(material_ids_.size() != densities_.size(),
-                       "The number of material IDs and values present in the initial guess "
-                       "must be equivalent.");
-
-  log.Log() << "\n***** inverse_solver constructed *****\n";
+    double* rho;
+    VecGetArray(x_, &rho);
+    for (PetscInt i = 0; i < material_ids_.size(); ++i)
+      rho[i] = initial_guess[i];
+    VecRestoreArray(x_, &rho);
+  }
+  else
+    OpenSnLogicalError("Only material ID-based problems are implemented.");
 }
 
 void
@@ -87,155 +102,193 @@ InverseSolver::Initialize()
 {
   solver_.Initialize();
 
-  // Check density guess
-  for (const auto& matid : material_ids_)
-  {
-    OpenSnLogicalErrorIf(solver_.GetMatID2XSMap().count(matid) == 0,
-                         "Material ID " + std::to_string(matid) + " in the density map " +
-                           "does not correspond to a material ID in the simulation.");
-  }
+  // Check for invalid material IDs
+  if (not material_ids_.empty())
+    for (const auto& matid : material_ids_)
+      OpenSnLogicalErrorIf(solver_.GetMatID2XSMap().count(matid) == 0,
+                           "Material ID " + std::to_string(matid) + " in the density map " +
+                             "does not correspond to a material ID in the simulation.");
+
+  // Define the detector boundary IDs from names
+  detector_bids_.reserve(detector_bndrys_.size());
+  for (const auto& bname : detector_bndrys_)
+    detector_bids_.push_back(solver_.supported_boundary_names.at(bname));
 
   // Generate the measured signal to reconstruct
-  SetForwardMode();
-  Solve();
+  solver_.SetOptions(GetForwardOptions());
+  ExecuteSteadyState();
   ref_leakage_ = ComputeDetectorSignal();
 
   log.Log() << "\n********** Reference Signal **********\n"
                "Boundary         Value\n"
                "--------         -----\n";
   for (int i = 0; i < ref_leakage_.size(); ++i)
-    log.Log() << std::left << std::setw(8) << detector_boundaries_[i] << "         " << std::left
+    log.Log() << std::left << std::setw(8) << detector_bndrys_[i] << "         " << std::left
               << std::setw(8) << std::setprecision(8) << ref_leakage_[i];
   log.Log() << "\n";
+
+  // Set densities to the initial guess
+  SetDensities(x_);
 }
 
 void
 InverseSolver::Execute()
 {
-  // Set the densities to the initial guess.
-  for (int i = 0; i < material_ids_.size(); ++i)
-  {
-    auto& xs = solver_.GetMatID2XSMap().at(material_ids_[i]);
-    std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(densities_[i]);
-  }
-
-  // Define the convergence normalization
-  const auto norm = std::accumulate(ref_leakage_.begin(), ref_leakage_.end(), 0.0);
+  // Bookkeeping
+  Vec df;
+  VecDuplicate(x_, &df);
+  VecSet(df, 0.0);
 
   // Start iterations
-  double f, dphi, dphi_ell;
-  double alpha, alpha_ell = alpha_max_;
-  std::vector<double> df(densities_.size()), p(densities_.size());
-  for (int nit = 0; nit < max_iterations_; ++nit)
+  double f = 0.0;
+  double alpha = alpha_;
+  double grad_norm = 0.0;
+  for (int nit = 0; nit < max_its_; ++nit)
   {
-    // Compute objective function, its gradient, and step length
-    f = EvaluateObjective();
-    df = p = EvaluateGradient();
+    EvaluateObjectiveAndGradient(x_, &f, df);
+    alpha = line_search_ ? BackTrackingLineSearch(x_, alpha_, df, f) : alpha_;
+    VecNorm(df, NORM_2, &grad_norm);
+    VecAXPY(x_, -alpha, df);
 
-    if (line_search_)
-    {
-      std::transform(df.begin(), df.end(), p.begin(), std::negate{});
-      dphi = std::inner_product(df.begin(), df.end(), p.begin(), 0.0);
-
-      auto alpha0 = (nit == 0) ? alpha_max_ : alpha_ell * dphi_ell / dphi;
-      alpha0 = std::min(alpha_max_, alpha0);
-      alpha = BacktrackingLineSearch(alpha0, f, df, p);
-    }
-    else
-    {
-      alpha = alpha_max_;
-    }
-
-    // Update for next iteration
-    densities_ = UpdateDensities(alpha, df);
-    dphi_ell = dphi;
-    alpha_ell = alpha;
-
-    // Print iteration info
     if (nit == 0)
-      log.Log() << "********** Iteration Summaries **********";
+      log.Log() << "********** Iteration Summary **********";
 
     std::stringstream ss;
     ss.precision(6);
-
-    ss << "Iteration: " << std::setw(4) << std::left << nit << "    ";
-    ss << "Obj Func: " << std::left << std::setw(12) << f << "    ";
-    ss << "Conv:  " << std::left << std::setw(12) << f / norm << "    ";
-    ss << "Alpha: " << std::left << std::setw(12) << alpha << "    ";
-    ss << "Densities: [";
-    for (int i = 0; i < densities_.size() - 1; ++i)
-      ss << densities_[i] << " ";
-    ss << densities_.back() << "]" << (f / norm < tolerance_ ? "  CONVERGED" : "");
+    ss << "Iteration " << std::right << std::setw(4) << nit << "  ";
+    ss << "Obj  " << std::right << std::setw(12) << f << "  ";
+    ss << "Alpha  " << std::right << std::setw(12) << alpha << "  ";
+    ss << "Solution  " << VecString(x_) << "  ";
+    ss << "Gradient  " << VecString(df) << (f < tol_ ? "    CONVERGED" : "");
     log.Log() << ss.str();
 
-    if (f / norm < tolerance_)
+    if (f < tol_)
       break;
   }
+  log.Log() << "\n***** Obj Func Evaluations:  " << num_func_evals_;
 }
 
-double
-InverseSolver::EvaluateObjective() const
+PetscErrorCode
+InverseSolver::EvaluateObjective(Vec x, PetscReal* f)
 {
-  // Compute the simulated leakage
-  SetForwardMode();
-  Solve();
-  const auto leakage = ComputeDetectorSignal();
+  ++num_func_evals_;
 
-  // Evaluate the leakage mismatch
+  // Solve the forward problem
+  SetDensities(x);
+  solver_.SetOptions(GetForwardOptions());
+  ExecuteSteadyState();
+
+  // Evaluate the objective function
   double val = 0.0;
-  for (int i = 0; i < ref_leakage_.size(); ++i)
-    val += ref_leakage_[i] - leakage[i];
-  return 0.5 * val * val;
+  const auto leakage = ComputeDetectorSignal();
+  for (int i = 0; i < leakage.size(); ++i)
+    val += leakage[i] - ref_leakage_[i];
+  *f = 0.5 * val * val;
+  return 0;
+}
+
+PetscErrorCode
+InverseSolver::EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df)
+{
+  ++num_func_evals_;
+
+  // Solve the forward problem
+  SetDensities(x);
+  solver_.SetOptions(GetForwardOptions());
+  ExecuteSteadyState();
+
+  // Evaluate the objective function
+  double val = 0.0;
+  const auto leakage = ComputeDetectorSignal();
+  for (int i = 0; i < leakage.size(); ++i)
+    val += leakage[i] - ref_leakage_[i];
+  *f = 0.5 * val * val;
+
+  // Get data for the inner product
+  const auto phi_fwd = solver_.PhiNewLocal();
+  const auto psi_fwd = solver_.PsiNewLocal();
+
+  // Solve the adjoint problem
+  solver_.SetOptions(GetAdjointOptions(leakage));
+  ExecuteSteadyState();
+  const auto psi_adj = solver_.PsiNewLocal();
+
+  // Compute the gradient
+  ComputeInnerProduct(phi_fwd, psi_fwd, psi_adj, df);
+
+  return 0;
 }
 
 std::vector<double>
-InverseSolver::EvaluateGradient() const
+InverseSolver::ComputeDetectorSignal() const
 {
-  // Get the forward solutions
-  const auto phi = solver_.PhiNewLocal();
-  const auto psi = solver_.PsiNewLocal();
+  std::vector<double> leakage;
+  leakage.reserve(detector_bids_.size());
+  const auto leakage_map = solver_.ComputeLeakage(detector_bids_);
+  for (const auto& [bid, vals] : leakage_map)
+    leakage.push_back(std::accumulate(vals.begin(), vals.end(), 0.0));
+  return leakage;
+}
 
-  // Solve the adjoint, get the adjoint solution
-  SetAdjointMode();
-  Solve();
-  const auto psi_dagger = solver_.PsiNewLocal();
+void
+InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
+                                   const std::vector<std::vector<double>>& psi_fwd,
+                                   const std::vector<std::vector<double>>& psi_adj,
+                                   Vec df) const
+{
+  // Zero out the df vector
+  VecSet(df, 0.0);
 
-  // Reset to forward mode for later computations
-  SetForwardMode();
+  // Set to forward mode
+  solver_.SetOptions(GetForwardOptions());
 
+  // Get solver data
   const auto& grid = solver_.Grid();
   const auto& discretization = solver_.SpatialDiscretization();
   const auto& unit_cell_matrices = solver_.GetUnitCellMatrices();
   const auto& transport_views = solver_.GetCellTransportViews();
+  const auto num_moments = solver_.NumMoments();
 
   // Loop over groupsets
-  int gs = 0;
-  std::map<int, double> update;
   for (const auto& groupset : solver_.Groupsets())
   {
+    const auto gs = groupset.id_;
     const auto& uk_man = groupset.psi_uk_man_;
-
     const auto& quadrature = groupset.quadrature_;
     const auto& m2d = quadrature->GetMomentToDiscreteOperator();
     const auto& moment_map = quadrature->GetMomentToHarmonicsIndexMap();
     const auto& weights = quadrature->weights_;
-    const auto num_gs_angles = quadrature->omegas_.size();
-
+    const auto num_gs_dirs = quadrature->omegas_.size();
     const auto num_gs_groups = groupset.groups_.size();
     const auto first_gs_group = groupset.groups_.front().id_;
-
-    const auto num_moments = solver_.NumMoments();
 
     // Loop over cells
     for (const auto& cell : grid.local_cells)
     {
+      // Default to cell-wise index
+      int64_t idx = cell.local_id_;
+
+      // Remap the index for material-wise densities
+      if (not material_ids_.empty())
+      {
+        // Skip this cell if not an unknown material density
+        const auto it = std::find(material_ids_.begin(), material_ids_.end(), cell.material_id_);
+        if (it == material_ids_.end())
+          continue;
+
+        // Define the new index
+        idx = it - material_ids_.begin();
+      }
+
+      // Get cell data
       const auto& cell_mapping = discretization.GetCellMapping(cell);
       const auto& transport_view = transport_views[cell.local_id_];
       const auto& fe_values = unit_cell_matrices[cell.local_id_];
       const auto& xs = transport_view.XS();
+      const auto& rho =
+        material_ids_.empty() ? solver_.DensitiesLocal()[cell.local_id_] : xs.ScalingFactor();
 
-      const auto matid = cell.material_id_;
-      const auto density = xs.ScalingFactor();
+      // Get xs data
       const auto& sigma_t = xs.SigmaTotal();
       const auto& S = xs.TransferMatrices();
       const auto& F = xs.ProductionMatrix();
@@ -253,188 +306,149 @@ InverseSolver::EvaluateGradient() const
           const auto& sig_t = sigma_t[g];
 
           // Precompute source moments
-          std::vector<double> q_moments(num_moments, 0.0);
+          std::vector<double> q_mom(num_moments, 0.0);
           for (int m = 0; m < num_moments; ++m)
           {
             const auto ell = moment_map[m].ell;
             const auto uk_map = transport_view.MapDOF(i, m, 0);
 
-            // Apply scattering
+            // Scattering
             double s = 0.0;
             if (ell < S.size())
               for (const auto& [_, gp, sig_ell] : S[ell].Row(g))
-                s += sig_ell * phi[uk_map + gp];
+                s += sig_ell * phi_fwd[uk_map + gp];
 
-            // Apply fission
+            // Fission
             double f = 0.0;
-            if (ell == 0 and xs.IsFissionable())
-            {
-              unsigned int gp = 0;
+            unsigned gp = 0;
+            if (xs.IsFissionable() and ell == 0)
               for (const auto& sig_f : F[g])
-                f += sig_f * phi[uk_map + gp];
-            }
+                f += sig_f * phi_fwd[uk_map + gp++];
 
-            q_moments[m] = s + f;
+            // Accumumlate source moment
+            q_mom[m] = s + f;
+          } // for moment
 
-          } // for moment m
-
-          // Apply the angular integration
-          for (int n = 0; n < num_gs_angles; ++n)
+          // Angular integration
+          for (int d = 0; d < num_gs_dirs; ++d)
           {
-            const auto wt = weights[n] * V;
-            const auto uk_map = discretization.MapDOF(cell, i, uk_man, n, gsg);
+            const auto w = weights[d] * V;
+            const auto dof = discretization.MapDOF(cell, i, uk_man, d, gsg);
 
-            // Compute discrete source from moment source
-            double transfer = 0.0;
-            for (unsigned int m = 0; m < solver_.NumMoments(); ++m)
-              transfer += m2d[m][n] * q_moments[m];
+            // Apply moment-to-discrete operator to source moments
+            double q_dir = 0.0;
+            for (int m = 0; m < num_moments; ++m)
+              q_dir += m2d[m][d] * q_mom[m];
 
-            const double drho_A_psi = (sig_t * psi[gs][uk_map] - transfer) / density;
-            update[matid] += wt * psi_dagger[gs][uk_map] * drho_A_psi;
-
-          } // for angle n
-        }   // for groupset group gsg
-      }     // for node i
+            // Inner product contribution
+            const auto val = w * psi_adj[gs][dof] * (sig_t * psi_fwd[gs][dof] - q_dir) / rho;
+            VecSetValueLocal(df, idx, -val, ADD_VALUES);
+          } // for direction
+        }   // for group
+      }     // for node
     }       // for cell
+  }         // for groupset
 
-    ++gs;
-
-  } // for groupset
-
-  std::vector<double> local_outputs(material_ids_.size(), 0.0);
-  for (int i = 0; i < material_ids_.size(); ++i)
-    local_outputs[i] += update[material_ids_[i]];
-
-  std::vector<double> global_outputs(material_ids_.size(), 0.0);
-  mpi_comm.all_reduce(local_outputs.data(),
-                      static_cast<int>(local_outputs.size()),
-                      global_outputs.data(),
-                      mpicpp_lite::op::sum<double>());
-  return global_outputs;
+  VecAssemblyBegin(df);
+  VecAssemblyEnd(df);
 }
 
 double
-InverseSolver::BacktrackingLineSearch(const double alpha0,
-                                      const double f0,
-                                      const std::vector<double>& df,
-                                      const std::vector<double>& p) const
+InverseSolver::BackTrackingLineSearch(Vec x, double alpha0, Vec df, double f0)
 {
-  // Define the stop criteria
-  const auto m = std::inner_product(df.begin(), df.end(), p.begin(), 0.0);
-  const auto t = -1.0e-4 * m;
+  Vec xp;
+  VecDuplicate(x, &xp);
+
+  // Define the sufficient decrease critereia
+  double m = 0.0;
+  VecNorm(df, NORM_2, &m);
+  m = -m * m;
+  double t = -1.0e-4 * m;
 
   // Start the line search
-  double alpha = alpha0;
-  for (int j = 0; j < 5; ++j)
+  double alpha(alpha0), f(f0);
+  for (int i = 0; i < max_ls_its_; ++i)
   {
-    // Set the densities, then evaluate the objective functions
-    UpdateDensities(alpha, df);
-    const auto f = EvaluateObjective();
-
-    // If sufficient decrease, exit the routine
+    VecCopy(x, xp);
+    VecAXPY(xp, -alpha, df);
+    EvaluateObjective(xp, &f);
     if (f0 - f >= alpha * t)
-      break;
-
-    // Otherwise, scale alpha down
+      return alpha;
     alpha *= 0.5;
   }
-  return std::max(alpha, 0.001);
+  return alpha;
 }
 
-std::vector<double>
-InverseSolver::ComputeDetectorSignal() const
+void
+InverseSolver::SetDensities(Vec x)
 {
-  // Compute the leakage
-  std::vector<uint64_t> bids;
-  bids.reserve(detector_boundaries_.size());
-  for (const auto& bname : detector_boundaries_)
-    bids.emplace_back(solver_.supported_boundary_names.at(bname));
-  const auto leakage_map = solver_.ComputeLeakage(bids);
+  int64_t n;
+  VecGetLocalSize(x, &n);
 
-  // Format the leakage
-  std::vector<double> leakage;
-  leakage.reserve(leakage_map.size());
-  for (const auto& [bid, vals] : leakage_map)
-    leakage.push_back(std::accumulate(vals.begin(), vals.end(), 0.0));
-  return leakage;
-}
-
-std::vector<double>
-InverseSolver::UpdateDensities(const double alpha, const std::vector<double>& drho) const
-{
-  std::vector<double> rho;
-  for (int i = 0; i < material_ids_.size(); ++i)
+  // Material ID-based densities
+  if (not material_ids_.empty())
   {
-    // Apply step length to density
-    auto update = alpha * drho[i];
-    if (densities_[i] + update < 0.0)
-      update = densities_[i] - 1.0e-6;
-    if (std::fabs(update) > 0.1 * densities_[i])
-      update = (update > 0.0 ? 0.1 : -0.1) * densities_[i];
+    OpenSnLogicalErrorIf(n != material_ids_.size(), "Vector size mismatch.");
 
-    rho.push_back(densities_[i] + update);
-
-    // Set material properties for new density
-    auto& xs = solver_.GetMatID2XSMap().at(material_ids_[i]);
-    std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(rho[i]);
+    const double* ptr;
+    VecGetArrayRead(x, &ptr);
+    for (int i = 0; i < n; ++i)
+    {
+      auto& xs = solver_.GetMatID2XSMap().at(material_ids_.at(i));
+      std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(*ptr++);
+    }
+    VecRestoreArrayRead(x, &ptr);
   }
-  return rho;
 }
 
-void
-InverseSolver::SetForwardMode() const
+InputParameters
+InverseSolver::GetForwardOptions() const
 {
-  ParameterBlock user_params;
-  user_params.AddParameter("adjoint", false);
-  user_params.AddParameter("clear_boundary_conditions", true);
+  ParameterBlock params;
+  params.AddParameter("adjoint", false);
+  params.AddParameter("clear_boundary_conditions", true);
 
   ParameterBlock bcs("boundary_conditions");
-  for (int b = 0; b < bc_options_.NumParameters(); ++b)
-    bcs.AddParameter(bc_options_.GetParam(b));
+  for (int b = 0; b < forward_bcs_.NumParameters(); ++b)
+    bcs.AddParameter(forward_bcs_.GetParam(b));
   bcs.ChangeToArray();
-  user_params.AddParameter(bcs);
+  params.AddParameter(bcs);
 
-  auto params = LBSSolver::OptionsBlock();
-  params.AssignParameters(user_params);
-  solver_.SetOptions(params);
+  auto lbs_params = LBSSolver::OptionsBlock();
+  lbs_params.AssignParameters(params);
+  return lbs_params;
 }
 
-void
-InverseSolver::SetAdjointMode() const
+InputParameters
+InverseSolver::GetAdjointOptions(const std::vector<PetscReal>& leakage) const
 {
-  const auto leakage = ComputeDetectorSignal();
-
-  ParameterBlock user_params;
-  user_params.AddParameter("adjoint", true);
-  user_params.AddParameter("clear_boundary_conditions", true);
+  ParameterBlock params;
+  params.AddParameter("adjoint", true);
+  params.AddParameter("clear_boundary_conditions", true);
 
   ParameterBlock bcs("boundary_conditions");
-  for (int i = 0; i < detector_boundaries_.size(); ++i)
+  for (int i = 0; i < detector_bndrys_.size(); ++i)
   {
-    ParameterBlock bc(std::to_string(i + 1));
-
-    const auto bndry_name = detector_boundaries_[i];
-
-    bc.AddParameter("name", bndry_name);
-    bc.AddParameter("type", "isotropic");
-
-    double mismatch = leakage[i] - ref_leakage_[i];
+    const auto mismatch = leakage[i] - ref_leakage_[i];
     std::vector<double> vals(solver_.NumGroups(), mismatch);
+
+    ParameterBlock bc(std::to_string(i + 1));
+    bc.AddParameter("name", detector_bndrys_[i]);
+    bc.AddParameter("type", "isotropic");
     ParameterBlock group_strength("group_strength", vals);
     bc.AddParameter(group_strength);
-
     bcs.AddParameter(bc);
   }
   bcs.ChangeToArray();
-  user_params.AddParameter(bcs);
+  params.AddParameter(bcs);
 
-  auto params = LBSSolver::OptionsBlock();
-  params.AssignParameters(user_params);
-  solver_.SetOptions(params);
+  auto lbs_params = LBSSolver::OptionsBlock();
+  lbs_params.AssignParameters(params);
+  return lbs_params;
 }
 
 void
-InverseSolver::Solve() const
+InverseSolver::ExecuteSteadyState() const
 {
   auto& ags_solver = *solver_.GetPrimaryAGSSolver();
   ags_solver.Setup();
@@ -447,6 +461,27 @@ InverseSolver::Solve() const
     solver_.ReorientAdjointSolution();
 
   solver_.UpdateFieldFunctions();
+}
+
+std::string
+InverseSolver::VecString(Vec x)
+{
+  int64_t n;
+  const double* ptr;
+
+  std::stringstream ss;
+  ss.flags(std::ios::scientific);
+  ss.precision(6);
+
+  VecGetLocalSize(x, &n);
+  VecGetArrayRead(x, &ptr);
+  ss << "[";
+  for (int64_t i = 0; i < n - 1; ++i)
+    ss << ptr[i] << "  ";
+  ss << ptr[n - 1] << "]";
+  VecRestoreArrayRead(x, &ptr);
+
+  return ss.str();
 }
 
 } // namespace opensn::lbs

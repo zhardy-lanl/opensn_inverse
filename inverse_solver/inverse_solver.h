@@ -1,13 +1,18 @@
 #pragma once
 
-#include "opensn/modules/linear_boltzmann_solvers/discrete_ordinates_solver/lbs_discrete_ordinates_solver.h"
+#include "opensn/framework/physics/solver_base/solver.h"
+#include <petsctao.h>
 #include <vector>
 #include <map>
 #include <string>
 
 namespace opensn::lbs
 {
+class DiscreteOrdinatesSolver;
 
+/**
+ * An inverse problem solver for density reconstruction.
+ */
 class InverseSolver : public opensn::Solver
 {
 public:
@@ -16,64 +21,49 @@ public:
 
   virtual ~InverseSolver() = default;
 
-  /**
-   * Initialize the inverse solver by initializing the underlying solver object,
-   * performing checks, and computing the reference density signal.
-   */
   void Initialize() override;
   void Execute() override;
 
-  /**
-   * Evaluate the objective function for a given computed leakage.
-   */
-  double EvaluateObjective() const;
+  PetscErrorCode EvaluateObjective(Vec x, PetscReal* f);
+  PetscErrorCode EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df);
 
-  /**
-   * Computes the density update by computing the density derivative of the
-   * Lagrangian minimization functional.
-   */
-  std::vector<double> EvaluateGradient() const;
-
-private:
-  double BacktrackingLineSearch(double alpha0,
-                                double f0,
-                                const std::vector<double>& df,
-                                const std::vector<double>& p) const;
-
+protected:
   std::vector<double> ComputeDetectorSignal() const;
+  void ComputeInnerProduct(const std::vector<double>& phi_fwd,
+                           const std::vector<std::vector<double>>& psi_fwd,
+                           const std::vector<std::vector<double>>& psi_adj,
+                           Vec df) const;
 
-  /**
-   * Sets material densities based on the currently set step length and the
-   * density gradient vector.
-   */
-  std::vector<double> UpdateDensities(const double alpha, const std::vector<double>& drho) const;
+  double BackTrackingLineSearch(Vec x, double alpha0, Vec df, double f0);
+  void SetDensities(Vec x);
 
-  void SetForwardMode() const;
-  void SetAdjointMode() const;
+  InputParameters GetForwardOptions() const;
+  InputParameters GetAdjointOptions(const std::vector<PetscReal>& leakage) const;
+  void ExecuteSteadyState() const;
 
-  /**
-   * A generic steady state execution routine. This is equivalent to the
-   * steady state executioner in LinearBoltzmannSolvers.
-   */
-  void Solve() const;
-
-private:
-  DiscreteOrdinatesSolver& solver_;
-  const ParameterBlock bc_options_;
-
-  const std::vector<std::string> detector_boundaries_;
-  std::vector<double> ref_leakage_;
-  std::vector<double> leakage_;
+protected:
+  Tao tao_;
+  Vec x_;
 
   std::vector<int> material_ids_;
-  std::vector<double> densities_;
+  std::vector<uint64_t> detector_bids_;
+  std::vector<double> ref_leakage_;
 
-  const double alpha_max_;
+  unsigned num_func_evals_;
 
-  const unsigned int max_iterations_;
-  const double tolerance_;
+  DiscreteOrdinatesSolver& solver_;
 
+  const ParameterBlock forward_bcs_;
+  const std::vector<std::string> detector_bndrys_;
+
+  const unsigned max_its_;
+  const double tol_;
+  const double alpha_;
   const bool line_search_;
+  const unsigned max_ls_its_;
+
+private:
+  static std::string VecString(Vec x);
 };
 
 } // namespace opensn::lbs
