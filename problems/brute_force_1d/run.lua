@@ -26,7 +26,7 @@ mesh.SetUniformMaterialID(0)
 
 -- Create cross sections
 micro_xs = xs.Create()
-xs.Set(micro_xs, SIMPLEXS1, num_groups, 1.0, 0.25)
+xs.Set(micro_xs, SIMPLE_ONE_GROUP, 1.0, 0.25)
 
 -- Create materials
 materials = {}
@@ -51,7 +51,7 @@ lbs_block = {
     options = {
         scattering_order = 0,
         save_angular_flux = true,
-        verbose_inner_iterations = false,
+        verbose_inner_iterations = true,
         boundary_conditions = {
             {
                 name = "zmin",
@@ -72,8 +72,7 @@ ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 solver.Initialize(ss_solver)
 solver.Execute(ss_solver)
 
-leakage = lbs.ComputeLeakage(phys, { "zmax" })
-reference = leakage["zmax"][1]
+reference = lbs.ComputeLeakage(phys, { "zmax" })["zmax"][1]
 
 --################################################## Run simulations
 

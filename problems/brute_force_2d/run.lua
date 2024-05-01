@@ -26,7 +26,7 @@ mesh.SetUniformMaterialID(0)
 
 -- Create cross sections
 micro_xs = xs.Create()
-xs.Set(micro_xs, SIMPLEXS1, num_groups, 1.0, 0.25)
+xs.Set(micro_xs, SIMPLE_ONE_GROUP, 1.0, 0.25)
 
 -- Create materials
 material = mat.AddMaterial("Background")
