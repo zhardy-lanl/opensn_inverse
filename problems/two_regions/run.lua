@@ -65,25 +65,25 @@ mesh.SetUniformMaterialID(0)
 mesh.SetMaterialIDFromLogicalVolume(vol, 1)
 
 -- Create cross sections
-micro_xs = {}
-micro_xs[1] = xs.Create()
-xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
-xs.MakeCombined({ { micro_xs[1], 1.0 } })
+macro_xs = {}
+macro_xs[1] = xs.Create()
+xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.SetScalingFactor(macro_xs[1], 1.0)
 
-micro_xs[2] = xs.Create()
-xs.Set(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
-xs.MakeCombined({ { micro_xs[2], 5.0 } })
+macro_xs[2] = xs.Create()
+xs.Set(macro_xs[2], OPENSN_XSFILE, "fuel.xs")
+xs.SetScalingFactor(macro_xs[2], 5.0)
 
 -- Create materials
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
 mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Fuel")
 mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
 if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
@@ -124,8 +124,8 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
-    material_ids = { 1 },
-    initial_guess = { 4.8 },
+    material_ids = { 0, 1 },
+    initial_guess = { 1.2, 4.8 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,

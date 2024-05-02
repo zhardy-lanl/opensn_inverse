@@ -51,14 +51,14 @@ mesh.MeshGenerator.Execute(orthomesh)
 mesh.SetUniformMaterialID(0)
 
 -- Create cross sections
-micro_xs = xs.Create()
-xs.Set(micro_xs, OPENSN_XSFILE, "fuel.xs")
-xs.MakeCombined({ { micro_xs, 2.0 } })
+macro_xs = xs.Create()
+xs.Set(macro_xs, OPENSN_XSFILE, "fuel.xs")
+xs.SetScalingFactor(macro_xs, 2.0)
 
 -- Create materials
 material = mat.AddMaterial("Fuel")
 mat.AddProperty(material, TRANSPORT_XSECTIONS)
-mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, micro_xs)
+mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
 -- Setup physics
 if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)

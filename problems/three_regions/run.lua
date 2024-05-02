@@ -47,33 +47,33 @@ mesh.SetMaterialIDFromLogicalVolume(vol_heavy, 1)
 mesh.SetMaterialIDFromLogicalVolume(vol_light, 2)
 
 -- Create cross sections
-micro_xs = {}
-micro_xs[1] = xs.Create()
-xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
-xs.MakeCombined({ { micro_xs[1], 1.0 } })
+macro_xs = {}
+macro_xs[1] = xs.Create()
+xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.SetScalingFactor(macro_xs[1], 1.0)
 
-micro_xs[2] = xs.Create()
-xs.Set(micro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
-xs.MakeCombined({ { micro_xs[2], 5.0 } })
+macro_xs[2] = xs.Create()
+xs.Set(macro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
+xs.SetScalingFactor(macro_xs[2], 5.0)
 
-micro_xs[3] = xs.Create()
-xs.Set(micro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
-xs.MakeCombined({ { micro_xs[3], 2.0 } })
+macro_xs[3] = xs.Create()
+xs.Set(macro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
+xs.SetScalingFactor(macro_xs[3], 2.0)
 
 -- Create materials
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
 mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Heavy Fuel")
 mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 materials[3] = mat.AddMaterial("Light Fuel")
 mat.AddProperty(materials[3], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, micro_xs[3])
+mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, macro_xs[3])
 
 -- Setup physics
 quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
@@ -112,7 +112,7 @@ inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = { "xmax", "ymax" },
     material_ids = { 1, 2 },
-    initial_guess = { 4.9, 2.1 },
+    initial_guess = { 4.2, 2.4 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
