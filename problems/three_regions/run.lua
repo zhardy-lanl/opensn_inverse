@@ -10,7 +10,7 @@ if N_y == nil then N_y = 20 end
 dx = X / N_x
 dy = Y / N_y
 
-if src == nil then src = 500.0 end
+if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
 if tol == nil then tol = 1.0e-8 end
@@ -112,12 +112,13 @@ inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = { "xmax", "ymax" },
     material_ids = { 1, 2 },
-    initial_guess = { 4.5, 2.2 },
+    initial_guess = { 4.9, 2.1 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
     alpha = alpha,
     line_search = line_search,
+    use_tao = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 solver.Initialize(inv_solver)

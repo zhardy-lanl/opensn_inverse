@@ -19,7 +19,7 @@ public:
   static InputParameters GetInputParameters();
   explicit InverseSolver(const InputParameters& params);
 
-  virtual ~InverseSolver() = default;
+  ~InverseSolver() override;
 
   void Initialize() override;
   void Execute() override;
@@ -28,6 +28,9 @@ public:
   PetscErrorCode EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df);
 
 protected:
+  void ExecuteSimple();
+  void ExecuteTao();
+
   std::vector<double> ComputeDetectorSignal() const;
   void ComputeInnerProduct(const std::vector<double>& phi_fwd,
                            const std::vector<std::vector<double>>& psi_fwd,
@@ -39,17 +42,16 @@ protected:
 
   InputParameters GetForwardOptions() const;
   InputParameters GetAdjointOptions(const std::vector<PetscReal>& leakage) const;
-  void ExecuteSteadyState() const;
+  void ExecuteSteadyState();
 
 protected:
   Tao tao_;
-  Vec x_;
+  Vec solution_;
+  Vec gradient_;
 
   std::vector<int> material_ids_;
   std::vector<uint64_t> detector_bids_;
   std::vector<double> ref_leakage_;
-
-  unsigned num_func_evals_;
 
   DiscreteOrdinatesSolver& solver_;
 
@@ -61,6 +63,9 @@ protected:
   const double alpha_;
   const bool line_search_;
   const unsigned max_ls_its_;
+  const bool use_tao_;
+
+  unsigned num_transport_solves_;
 
 private:
   static std::string VecString(Vec x);

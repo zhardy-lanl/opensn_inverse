@@ -106,6 +106,7 @@ inverse_options = {
     tol = tol,
     alpha = alpha,
     line_search = line_search,
+    use_tao = true
 }
 
 inv_solver = lbs.InverseSolver.Create(inverse_options)

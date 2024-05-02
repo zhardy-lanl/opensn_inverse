@@ -15,7 +15,7 @@ dx = X / N_x
 dy = Y / N_y
 dz = Z / N_z
 
-if src == nil then src = 500.0 end
+if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
 if tol == nil then tol = 1.0e-8 end
@@ -123,7 +123,7 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "ymax" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
     material_ids = { 1 },
     initial_guess = { 4.8 },
     forward_bcs = forward_bcs,
@@ -131,6 +131,7 @@ inverse_options = {
     tol = tol,
     alpha = alpha,
     line_search = line_search,
+    use_tao = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 solver.Initialize(inv_solver)
