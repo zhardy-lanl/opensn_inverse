@@ -12,11 +12,72 @@
 namespace opensn::lbs
 {
 
+std::string
+TaoConvergedReasonString(TaoConvergedReason reason)
+{
+  std::stringstream ss;
+  switch (reason)
+  {
+    // Converged
+    case TAO_CONVERGED_GATOL:
+      ss << "TAO_CONVERGED_GATOL";
+      break;
+    case TAO_CONVERGED_GRTOL:
+      ss << "TAO_CONVERGED_GRTOL";
+      break;
+    case TAO_CONVERGED_GTTOL:
+      ss << "TAO_CONVERGED_GTTOL";
+      break;
+    case TAO_CONVERGED_STEPTOL:
+      ss << "TAO_CONVERGED_STEPTOL";
+      break;
+    case TAO_CONVERGED_MINF:
+      ss << "TAO_CONVERGED_MINF";
+      break;
+    case TAO_CONVERGED_USER:
+      ss << "TAO_CONVERGED_USER";
+      break;
+
+    // Diverged
+    case TAO_DIVERGED_MAXITS:
+      ss << "TAO_DIVERGED_MAXITS";
+      break;
+    case TAO_DIVERGED_NAN:
+      ss << "TAO_DIVERGED_NAN";
+      break;
+    case TAO_DIVERGED_MAXFCN:
+      ss << "TAO_DIVERGED_MAXFCN";
+      break;
+    case TAO_DIVERGED_LS_FAILURE:
+      ss << "TAO_DIVERGED_LS_FAILURE";
+      break;
+    case TAO_DIVERGED_TR_REDUCTION:
+      ss << "TAO_DIVERGED_TR_REDUCTION";
+      break;
+    case TAO_DIVERGED_USER:
+      ss << "TAO_DIVERGED_USER";
+      break;
+
+    // Unknown
+    default:
+      ss << "Unknown TaoConvergedReason";
+      break;
+  }
+  return ss.str();
+}
+
 PetscErrorCode
 __EvaluateObjectiveAndGradient(Tao, Vec x, PetscReal* f, Vec df, void* ctx)
 {
   auto app_ctx = static_cast<InverseSolver*>(ctx);
   return app_ctx->EvaluateObjectiveAndGradient(x, f, df);
+}
+
+PetscErrorCode
+__Monitor(Tao, void* ctx)
+{
+  auto app_ctx = static_cast<InverseSolver*>(ctx);
+  return app_ctx->Monitor();
 }
 
 OpenSnRegisterObjectInNamespace(lbs, InverseSolver);
@@ -109,14 +170,16 @@ InverseSolver::InverseSolver(const InputParameters& params)
     if (use_tao_)
     {
       TaoCreate(opensn::mpi_comm, &tao_);
-      TaoSetType(tao_, TAOCG);
+      TaoSetType(tao_, TAOBNCG);
       TaoSetSolution(tao_, solution_);
       TaoSetApplicationContext(tao_, this);
       TaoSetObjectiveAndGradient(tao_, gradient_, __EvaluateObjectiveAndGradient, this);
+      TaoSetMonitor(tao_, __Monitor, this, NULL);
 
-      PetscOptionsSetValue(NULL, "-tao_fmin", std::to_string(tol_).c_str());
-      PetscOptionsSetValue(NULL, "-tao_max_it", std::to_string(max_its_).c_str());
-      PetscOptionsSetValue(NULL, "-tao_monitor", "");
+      TaoSetMaximumIterations(tao_, max_its_);
+      TaoSetTolerances(tao_, tol_, tol_, tol_);
+      //        PetscOptionsSetValue(NULL, "-tao_bncg_type", "gd");
+      //        PetscOptionsSetValue(NULL, "-tao_ls_type", "unit");
       TaoSetFromOptions(tao_);
     }
   }
@@ -170,13 +233,22 @@ void
 InverseSolver::Execute()
 {
   if (use_tao_)
-    TaoSolve(tao_);
+    ExecuteTao();
   else
     ExecuteSimple();
 
   log.Log() << "\n********** Inverse Solver Summary **********";
   log.Log() << "Solution:            " << VecString(solution_);
   log.Log() << "# Transport Solves:  " << num_transport_solves_;
+  log.Log() << "\n";
+}
+
+void
+InverseSolver::ExecuteTao()
+{
+  TaoSolve(tao_);
+  log.Log() << "\n********** Tao Solver Summary **********";
+  TaoView(tao_, PETSC_VIEWER_STDOUT_WORLD);
   log.Log() << "\n";
 }
 
@@ -256,6 +328,24 @@ InverseSolver::EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df)
   // Compute the gradient
   ComputeInnerProduct(phi_fwd, psi_fwd, psi_adj, df);
 
+  return 0;
+}
+
+PetscErrorCode
+InverseSolver::Monitor() const
+{
+  Vec x, g;
+  PetscInt its;
+  PetscReal f, gnorm, cnorm, xdiff;
+  TaoConvergedReason reason;
+
+  TaoGetSolution(tao_, &x);
+  TaoGetGradient(tao_, &g, NULL, NULL);
+  TaoGetSolutionStatus(tao_, &its, &f, &gnorm, &cnorm, &xdiff, &reason);
+
+  log.Log() << its << ",  Function Value: " << f << ",  Gradient Norm: " << gnorm
+            << ",  Step Length: " << xdiff << ",  Solution: " << VecString(x)
+            << ",  Gradient: " << VecString(g);
   return 0;
 }
 

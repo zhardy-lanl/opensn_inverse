@@ -26,6 +26,7 @@ public:
 
   PetscErrorCode EvaluateObjective(Vec x, PetscReal* f);
   PetscErrorCode EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df);
+  PetscErrorCode Monitor() const;
 
 protected:
   void ExecuteSimple();
