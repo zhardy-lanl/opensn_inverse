@@ -64,15 +64,12 @@ xs.SetScalingFactor(macro_xs[3], 2.0)
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
 mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Heavy Fuel")
-mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 materials[3] = mat.AddMaterial("Light Fuel")
-mat.AddProperty(materials[3], TRANSPORT_XSECTIONS)
 mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, macro_xs[3])
 
 -- Setup physics

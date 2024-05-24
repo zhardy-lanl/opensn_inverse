@@ -31,7 +31,6 @@ macro_xs = xs.MakeScaled(micro_xs, 1.0)
 
 -- Create materials
 material = mat.AddMaterial("Background")
-mat.AddProperty(material, TRANSPORT_XSECTIONS)
 mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
 -- Setup physics

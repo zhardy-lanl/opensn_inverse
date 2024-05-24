@@ -1,4 +1,4 @@
--- Two region inverse problem
+-- Brute Force 2D Density Sampling
 
 -- General info
 if dim == nil then dim = 2 end
@@ -16,15 +16,6 @@ dy = Y / N_y
 dz = Z / N_z
 
 if src == nil then src = 1.0 end
-if alpha == nil then alpha = 1.0 end
-if maxit == nil then maxit = 100 end
-if tol == nil then tol = 1.0e-8 end
-if line_search == nil then line_search = true end
-
-if rho1 == nil then rho1 = 1.0 end
-if rho2 == nil then rho2 = 5.0 end
-
-if bg == nil then bg = true end
 
 num_groups = 1
 
@@ -72,12 +63,12 @@ mesh.SetMaterialIDFromLogicalVolume(vol, 1)
 -- Create cross sections
 macro_xs = {}
 macro_xs[1] = xs.Create()
-xs.Set(macro_xs[1], OPENSN_XSFILE, bg == true and "background.xs" or "fuel.xs")
-xs.SetScalingFactor(macro_xs[1], rho1)
+xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.SetScalingFactor(macro_xs[1], 1.0)
 
 macro_xs[2] = xs.Create()
 xs.Set(macro_xs[2], OPENSN_XSFILE, "fuel.xs")
-xs.SetScalingFactor(macro_xs[2], rho1)
+xs.SetScalingFactor(macro_xs[2], 5.0)
 
 -- Create materials
 materials = {}
@@ -89,17 +80,7 @@ materials[2] = mat.AddMaterial("Fuel")
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
-if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
-end
-
-forward_bcs = {
-    {
-        name = dim == 1 and "zmin" or "xmin",
-        type = "isotropic",
-        group_strength = { src }
-    }
-}
+quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 
 lbs_block = {
     num_groups = num_groups,
@@ -117,25 +98,34 @@ lbs_block = {
         scattering_order = 0,
         save_angular_flux = true,
         verbose_inner_iterations = false,
-        boundary_conditions = forward_bcs
+        boundary_conditions = {
+            {
+                name = "xmin",
+                type = "isotropic",
+                group_strength = { 1.0 }
+            }
+        }
     }
 }
 
+-- Run reference
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
+ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
--- Run inverse solver
-inverse_options = {
-    lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
-    material_ids = { 0, 1 },
-    initial_guess = { 1.1 * rho1, 0.9 * rho2 },
-    forward_bcs = forward_bcs,
-    max_its = maxit,
-    tol = tol,
-    alpha = alpha,
-    line_search = line_search,
-    use_tao = true
-}
-inv_solver = lbs.InverseSolver.Create(inverse_options)
-solver.Initialize(inv_solver)
-solver.Execute(inv_solver)
+solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
+reference = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+
+-- Run modified
+xs.SetScalingFactor(macro_xs[1], 1.00015)
+xs.SetScalingFactor(macro_xs[2], 4.79991)
+
+-- solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
+leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+
+f = 0.0
+for key, val in pairs(reference) do
+    f = f + (leakage[key][1] - reference[key][1]) ^ 2
+end
+log.Log(LOG_0, string.format("\nObjective Function: %-10.4e\n", 0.5 * f))

@@ -82,11 +82,9 @@ macro_xs[2] = xs.MakeScaled(micro_xs[2], ref_densities[2])
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
 mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Fuel")
-mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
