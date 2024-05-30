@@ -170,7 +170,7 @@ InverseSolver::InverseSolver(const InputParameters& params)
     if (use_tao_)
     {
       TaoCreate(opensn::mpi_comm, &tao_);
-      TaoSetType(tao_, TAOBNCG);
+      TaoSetType(tao_, TAOBLMVM);
       TaoSetSolution(tao_, solution_);
       TaoSetApplicationContext(tao_, this);
       TaoSetObjectiveAndGradient(tao_, gradient_, __EvaluateObjectiveAndGradient, this);
@@ -178,8 +178,6 @@ InverseSolver::InverseSolver(const InputParameters& params)
 
       TaoSetMaximumIterations(tao_, max_its_);
       TaoSetTolerances(tao_, tol_, tol_, tol_);
-      PetscOptionsSetValue(NULL, "-tao_bncg_type", "gd");
-      //      PetscOptionsSetValue(NULL, "-tao_ls_type", "unit");
       TaoSetFromOptions(tao_);
     }
   }
@@ -327,7 +325,6 @@ InverseSolver::EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df)
 
   // Compute the gradient
   ComputeInnerProduct(phi_fwd, psi_fwd, psi_adj, df);
-
   return 0;
 }
 
@@ -413,8 +410,9 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
       // Get cell data
       const auto& cell_mapping = discretization.GetCellMapping(cell);
       const auto& transport_view = transport_views[cell.local_id_];
-      const auto& fe_values = unit_cell_matrices[cell.local_id_];
-      const auto& xs = transport_view.XS();
+      const auto& mass_matrix = unit_cell_matrices[cell.local_id_].intV_shapeI_shapeJ;
+      const auto num_cell_nodes = cell_mapping.NumNodes();
+      const auto& xs = transport_views[cell.local_id_].XS();
       const auto& rho =
         material_ids_.empty() ? solver_.DensitiesLocal()[cell.local_id_] : xs.ScalingFactor();
 
@@ -424,60 +422,66 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
       const auto& F = xs.ProductionMatrix();
 
       // Loop over cell nodes
-      const auto num_cell_nodes = cell_mapping.NumNodes();
+      double val = 0.0;
       for (int i = 0; i < num_cell_nodes; ++i)
       {
-        const auto& V = fe_values.intV_shapeI[i];
-
-        // Loop over groupset groups
-        for (int gsg = 0; gsg < num_gs_groups; ++gsg)
+        for (int j = 0; j < num_cell_nodes; ++j)
         {
-          const auto g = first_gs_group + gsg;
-          const auto& sig_t = sigma_t[g];
+          const auto m_ij = mass_matrix[i][j];
 
-          // Precompute source moments
-          std::vector<double> q_mom(num_moments, 0.0);
-          for (int m = 0; m < num_moments; ++m)
+          // Loop over groupset groups
+          for (int gsg = 0; gsg < num_gs_groups; ++gsg)
           {
-            const auto ell = moment_map[m].ell;
-            const auto uk_map = transport_view.MapDOF(i, m, 0);
+            const auto g = first_gs_group + gsg;
+            const auto& sig_t = sigma_t[g] / rho;
 
-            // Scattering
-            double s = 0.0;
-            if (ell < S.size())
-              for (const auto& [_, gp, sig_ell] : S[ell].Row(g))
-                s += sig_ell * phi_fwd[uk_map + gp];
-
-            // Fission
-            double f = 0.0;
-            unsigned gp = 0;
-            if (xs.IsFissionable() and ell == 0)
-              for (const auto& sig_f : F[g])
-                f += sig_f * phi_fwd[uk_map + gp++];
-
-            // Accumumlate source moment
-            q_mom[m] = s + f;
-          } // for moment
-
-          // Angular integration
-          for (int d = 0; d < num_gs_dirs; ++d)
-          {
-            const auto w = weights[d] * V;
-            const auto dof = discretization.MapDOF(cell, i, uk_man, d, gsg);
-
-            // Apply moment-to-discrete operator to source moments
-            double q_dir = 0.0;
+            // Precompute source moments
+            std::vector<double> q_mom(num_moments, 0.0);
             for (int m = 0; m < num_moments; ++m)
-              q_dir += m2d[m][d] * q_mom[m];
+            {
+              const auto ell = moment_map[m].ell;
+              const auto uk_map = transport_view.MapDOF(j, m, 0);
 
-            // Inner product contribution
-            const auto val = w * psi_adj[gs][dof] * (sig_t * psi_fwd[gs][dof] - q_dir) / rho;
-            VecSetValueLocal(df, idx, -val, ADD_VALUES);
-          } // for direction
-        }   // for group
-      }     // for node
-    }       // for cell
-  }         // for groupset
+              // Scattering
+              double s = 0.0;
+              if (ell < S.size())
+                for (const auto& [_, gp, sig_ell] : S[ell].Row(g))
+                  s += sig_ell * phi_fwd[uk_map + gp];
+
+              // Fission
+              double f = 0.0;
+              unsigned gp = 0;
+              if (xs.IsFissionable() and ell == 0)
+                for (const auto& sig_f : F[g])
+                  f += sig_f * phi_fwd[uk_map + gp++];
+
+              // Accumumlate source moment
+              q_mom[m] = (s + f) / rho;
+            } // for moment
+
+            // Angular integration
+            for (int d = 0; d < num_gs_dirs; ++d)
+            {
+              const auto w = weights[d] * m_ij;
+              const auto dof_adj = discretization.MapDOF(cell, i, uk_man, d, gsg);
+              const auto dof_fwd = discretization.MapDOF(cell, j, uk_man, d, gsg);
+
+              // Apply moment-to-discrete operator to source moments
+              double q_dir = 0.0;
+              for (int m = 0; m < num_moments; ++m)
+                q_dir += m2d[m][d] * q_mom[m];
+
+              // Inner product contribution
+              val += w * psi_adj[gs][dof_adj] * (sig_t * psi_fwd[gs][dof_fwd] - q_dir);
+            } // for direction
+          }   // for group g
+        }     // for node j
+      }       // for node i
+
+      VecSetValue(df, idx, -val, ADD_VALUES);
+
+    } // for cell
+  }   // for groupset
 
   VecAssemblyBegin(df);
   VecAssemblyEnd(df);
