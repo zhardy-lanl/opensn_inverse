@@ -10,3 +10,4 @@ cmake-build-debug
 
 # auxiliary files
 .idea
+*.DS_Store
