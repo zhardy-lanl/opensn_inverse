@@ -89,7 +89,7 @@ lbs_block = {
             groups_from_to = { 0, num_groups - 1 },
             angular_quadrature_handle = quad,
             inner_linear_method = "gmres",
-            l_abs_tol = 1.0e-6,
+            l_abs_tol = 1.0e-10,
             l_max_its = 500,
             gmres_restart_interval = 100,
         },

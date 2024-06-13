@@ -178,8 +178,8 @@ InverseSolver::InverseSolver(const InputParameters& params)
 
       TaoSetMaximumIterations(tao_, max_its_);
       TaoSetTolerances(tao_, tol_, tol_, tol_);
-      //        PetscOptionsSetValue(NULL, "-tao_bncg_type", "gd");
-      //        PetscOptionsSetValue(NULL, "-tao_ls_type", "unit");
+      PetscOptionsSetValue(NULL, "-tao_bncg_type", "gd");
+      //      PetscOptionsSetValue(NULL, "-tao_ls_type", "unit");
       TaoSetFromOptions(tao_);
     }
   }
