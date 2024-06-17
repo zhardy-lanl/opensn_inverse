@@ -5,7 +5,7 @@ dx = X / N_x
 
 num_groups = 1
 sigma_t = 0.1
-c = 0.5
+if c == nil then c = 0.5 end
 
 rho_ref = 2.0
 rho0 = 2.1
@@ -105,5 +105,6 @@ for g = 0, num_groups - 1 do
     fieldfunc.Execute(line)
 
     filename = 'forward_ref_density'
-    fieldfunc.ExportToCSV(line,filename)
+    dir = c < 1.0e-8 and 'abs' or 'scat'
+    fieldfunc.ExportToCSV(line, dir .. '/' .. filename)
 end

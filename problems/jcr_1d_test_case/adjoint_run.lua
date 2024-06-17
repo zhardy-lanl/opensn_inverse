@@ -5,7 +5,7 @@ dx = X / N_x
 
 num_groups = 1
 sigma_t = 0.1
-c = 0.5
+if c == nil then c = 0.5 end
 
 rho0 = 2.1
 
@@ -56,11 +56,6 @@ adjoint_bcs = {
     },
 }
 
--- Switch to adjoint mode
-adjoint_options = {
-    adjoint = true,
-}
-
 lbs_block = {
     num_groups = num_groups,
     groupsets = {
@@ -74,6 +69,7 @@ lbs_block = {
         },
     },
     options = {
+        adjoint = true,
         scattering_order = 0,
         save_angular_flux = true,
         verbose_inner_iterations = false,
@@ -111,7 +107,8 @@ for g = 0, num_groups - 1 do
     fieldfunc.Execute(line)
 
     filename = 'adjoint_init_density'
-    fieldfunc.ExportToCSV(line,filename)
+    dir = c < 1.0e-8 and 'abs' or 'scat'
+    fieldfunc.ExportToCSV(line, dir .. '/' .. filename)
 end
 
 --############################################### Volume integrations
