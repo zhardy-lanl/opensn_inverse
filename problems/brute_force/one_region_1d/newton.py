@@ -13,7 +13,7 @@ def f(x):
         idx = np.searchsorted(X, x)
         x_low, y_low = X[idx], Y[idx]
         return y_low + df(x) * (x - x_low)
-    elif isinstance(x, (list, np.ndarray)):
+    elif isinstance(x, (list, np.ndarry)):
         return np.array([f(xi) for xi in x])
     else:
         TypeError()
@@ -60,7 +60,7 @@ for nit in range(100):
     delta = f(x_n) / df(x_n)
     x_n -= delta
 
-    plot_iteration(x_n, fr"$solution_{nit + 1}, \Delta x {delta:.3e}$")
+    plot_iteration(x_n, fr"$x_{nit + 1}, \Delta x {delta:.3e}$")
     print(f"Iteration {nit + 1:3d}: x_n {x_n:8.3g}  delta {delta:12.3e}")
 
     if np.abs(delta) < 1.0e-10:

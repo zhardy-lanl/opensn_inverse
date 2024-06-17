@@ -75,19 +75,17 @@ micro_xs[2] = xs.Create()
 xs.Set(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
 
 macro_xs = {}
-macro_xs[1] = xs.MakeCombined({ { micro_xs[1], ref_densities[1] } })
-macro_xs[2] = xs.MakeCombined({ { micro_xs[2], ref_densities[2] } })
+macro_xs[1] = xs.MakeScaled(micro_xs[1], ref_densities[1])
+macro_xs[2] = xs.MakeScaled(micro_xs[2], ref_densities[2])
 
 -- Create materials
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Fuel")
-mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
 if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
@@ -142,7 +140,7 @@ for i = 1, num_runs_per_dim do
     -- Scale the first material
     f_i = min_frac + (i - 1) * df
     rho_i = f_i * ref_densities[1]
-    macro_xs[1] = xs.MakeCombined({ { micro_xs[1], rho_i } })
+    xs.SetScalingFactor(macro_xs[1], rho_i)
     mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
     for j = 1, num_runs_per_dim do
@@ -150,7 +148,7 @@ for i = 1, num_runs_per_dim do
         -- Scale the second material
         f_j = min_frac + (j - 1) * df
         rho_j = f_j * ref_densities[2]
-        macro_xs[2] = xs.MakeCombined({ { micro_xs[2], rho_j } })
+        xs.SetScalingFactor(macro_xs[2], rho_j)
         mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
         -- Create the solver

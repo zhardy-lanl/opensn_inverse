@@ -1,4 +1,4 @@
--- Two region inverse problem
+-- Brute Force 2D Density Sampling
 
 -- General info
 if dim == nil then dim = 2 end
@@ -15,11 +15,7 @@ dx = X / N_x
 dy = Y / N_y
 dz = Z / N_z
 
-if src == nil then src = 500.0 end
-if alpha == nil then alpha = 1.0 end
-if maxit == nil then maxit = 100 end
-if tol == nil then tol = 1.0e-8 end
-if line_search == nil then line_search = true end
+if src == nil then src = 1.0 end
 
 num_groups = 1
 
@@ -65,38 +61,26 @@ mesh.SetUniformMaterialID(0)
 mesh.SetMaterialIDFromLogicalVolume(vol, 1)
 
 -- Create cross sections
-micro_xs = {}
-micro_xs[1] = xs.Create()
-xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
-xs.MakeCombined({ { micro_xs[1], 1.0 } })
+macro_xs = {}
+macro_xs[1] = xs.Create()
+xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.SetScalingFactor(macro_xs[1], 1.0)
 
-micro_xs[2] = xs.Create()
-xs.Set(micro_xs[2], OPENSN_XSFILE, "fuel.xs")
-xs.MakeCombined({ { micro_xs[2], 5.0 } })
+macro_xs[2] = xs.Create()
+xs.Set(macro_xs[2], OPENSN_XSFILE, "fuel.xs")
+xs.SetScalingFactor(macro_xs[2], 5.0)
 
 -- Create materials
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Fuel")
-mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
-if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
-end
-
-forward_bcs = {
-    {
-        name = dim == 1 and "zmin" or "xmin",
-        type = "isotropic",
-        group_strength = { src }
-    }
-}
+quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
 
 lbs_block = {
     num_groups = num_groups,
@@ -105,7 +89,7 @@ lbs_block = {
             groups_from_to = { 0, num_groups - 1 },
             angular_quadrature_handle = quad,
             inner_linear_method = "gmres",
-            l_abs_tol = 1.0e-6,
+            l_abs_tol = 1.0e-10,
             l_max_its = 500,
             gmres_restart_interval = 100,
         },
@@ -114,24 +98,34 @@ lbs_block = {
         scattering_order = 0,
         save_angular_flux = true,
         verbose_inner_iterations = false,
-        boundary_conditions = forward_bcs
+        boundary_conditions = {
+            {
+                name = "xmin",
+                type = "isotropic",
+                group_strength = { 1.0 }
+            }
+        }
     }
 }
 
+-- Run reference
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
+ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
--- Run inverse solver
-inverse_options = {
-    lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "ymax" },
-    material_ids = { 1 },
-    initial_guess = { 4.8 },
-    forward_bcs = forward_bcs,
-    max_its = maxit,
-    tol = tol,
-    alpha = alpha,
-    line_search = line_search,
-}
-inv_solver = lbs.InverseSolver.Create(inverse_options)
-solver.Initialize(inv_solver)
-solver.Execute(inv_solver)
+solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
+reference = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+
+-- Run modified
+xs.SetScalingFactor(macro_xs[1], 1.00015)
+xs.SetScalingFactor(macro_xs[2], 4.79991)
+
+-- solver.Initialize(ss_solver)
+solver.Execute(ss_solver)
+leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+
+f = 0.0
+for key, val in pairs(reference) do
+    f = f + (leakage[key][1] - reference[key][1]) ^ 2
+end
+log.Log(LOG_0, string.format("\nObjective Function: %-10.4e\n", 0.5 * f))

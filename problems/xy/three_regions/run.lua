@@ -10,7 +10,7 @@ if N_y == nil then N_y = 20 end
 dx = X / N_x
 dy = Y / N_y
 
-if src == nil then src = 500.0 end
+if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
 if tol == nil then tol = 1.0e-8 end
@@ -47,33 +47,30 @@ mesh.SetMaterialIDFromLogicalVolume(vol_heavy, 1)
 mesh.SetMaterialIDFromLogicalVolume(vol_light, 2)
 
 -- Create cross sections
-micro_xs = {}
-micro_xs[1] = xs.Create()
-xs.Set(micro_xs[1], OPENSN_XSFILE, "background.xs")
-xs.MakeCombined({ { micro_xs[1], 1.0 } })
+macro_xs = {}
+macro_xs[1] = xs.Create()
+xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
+xs.SetScalingFactor(macro_xs[1], 1.0)
 
-micro_xs[2] = xs.Create()
-xs.Set(micro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
-xs.MakeCombined({ { micro_xs[2], 5.0 } })
+macro_xs[2] = xs.Create()
+xs.Set(macro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
+xs.SetScalingFactor(macro_xs[2], 5.0)
 
-micro_xs[3] = xs.Create()
-xs.Set(micro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
-xs.MakeCombined({ { micro_xs[3], 2.0 } })
+macro_xs[3] = xs.Create()
+xs.Set(macro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
+xs.SetScalingFactor(macro_xs[3], 2.0)
 
 -- Create materials
 materials = {}
 
 materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, micro_xs[1])
+mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
 materials[2] = mat.AddMaterial("Heavy Fuel")
-mat.AddProperty(materials[2], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, micro_xs[2])
+mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 materials[3] = mat.AddMaterial("Light Fuel")
-mat.AddProperty(materials[3], TRANSPORT_XSECTIONS)
-mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, micro_xs[3])
+mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, macro_xs[3])
 
 -- Setup physics
 quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
@@ -93,7 +90,7 @@ lbs_block = {
             groups_from_to = { 0, num_groups - 1 },
             angular_quadrature_handle = quad,
             inner_linear_method = "gmres",
-            l_abs_tol = 1.0e-6,
+            l_abs_tol = 1.0e-10,
             l_max_its = 500,
             gmres_restart_interval = 100,
         },
@@ -112,12 +109,13 @@ inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = { "xmax", "ymax" },
     material_ids = { 1, 2 },
-    initial_guess = { 4.5, 2.2 },
+    initial_guess = { 4.2, 2.4 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
     alpha = alpha,
     line_search = line_search,
+    use_tao = true
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 solver.Initialize(inv_solver)

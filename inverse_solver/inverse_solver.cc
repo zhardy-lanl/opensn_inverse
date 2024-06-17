@@ -12,6 +12,74 @@
 namespace opensn::lbs
 {
 
+std::string
+TaoConvergedReasonString(TaoConvergedReason reason)
+{
+  std::stringstream ss;
+  switch (reason)
+  {
+    // Converged
+    case TAO_CONVERGED_GATOL:
+      ss << "TAO_CONVERGED_GATOL";
+      break;
+    case TAO_CONVERGED_GRTOL:
+      ss << "TAO_CONVERGED_GRTOL";
+      break;
+    case TAO_CONVERGED_GTTOL:
+      ss << "TAO_CONVERGED_GTTOL";
+      break;
+    case TAO_CONVERGED_STEPTOL:
+      ss << "TAO_CONVERGED_STEPTOL";
+      break;
+    case TAO_CONVERGED_MINF:
+      ss << "TAO_CONVERGED_MINF";
+      break;
+    case TAO_CONVERGED_USER:
+      ss << "TAO_CONVERGED_USER";
+      break;
+
+    // Diverged
+    case TAO_DIVERGED_MAXITS:
+      ss << "TAO_DIVERGED_MAXITS";
+      break;
+    case TAO_DIVERGED_NAN:
+      ss << "TAO_DIVERGED_NAN";
+      break;
+    case TAO_DIVERGED_MAXFCN:
+      ss << "TAO_DIVERGED_MAXFCN";
+      break;
+    case TAO_DIVERGED_LS_FAILURE:
+      ss << "TAO_DIVERGED_LS_FAILURE";
+      break;
+    case TAO_DIVERGED_TR_REDUCTION:
+      ss << "TAO_DIVERGED_TR_REDUCTION";
+      break;
+    case TAO_DIVERGED_USER:
+      ss << "TAO_DIVERGED_USER";
+      break;
+
+    // Unknown
+    default:
+      ss << "Unknown TaoConvergedReason";
+      break;
+  }
+  return ss.str();
+}
+
+PetscErrorCode
+__EvaluateObjectiveAndGradient(Tao, Vec x, PetscReal* f, Vec df, void* ctx)
+{
+  auto app_ctx = static_cast<InverseSolver*>(ctx);
+  return app_ctx->EvaluateObjectiveAndGradient(x, f, df);
+}
+
+PetscErrorCode
+__Monitor(Tao, void* ctx)
+{
+  auto app_ctx = static_cast<InverseSolver*>(ctx);
+  return app_ctx->Monitor();
+}
+
 OpenSnRegisterObjectInNamespace(lbs, InverseSolver);
 
 InputParameters
@@ -45,6 +113,7 @@ InverseSolver::GetInputParameters()
   params.AddOptionalParameter(
     "line_search", false, "A flag for using a line search algorithm for step length selection.");
   params.AddOptionalParameter("max_ls_its", 20, "The maximum number of line search iterations.");
+  params.AddOptionalParameter("use_tao", false, "A flag to use TAO from PETSc.");
 
   params.ConstrainParameterRange("max_its", AllowableRangeLowLimit::New(1));
   params.ConstrainParameterRange("tol", AllowableRangeLowLimit::New(1.0e-16));
@@ -60,12 +129,13 @@ InverseSolver::InverseSolver(const InputParameters& params)
       object_stack, params.GetParamValue<size_t>("lbs_solver_handle"))),
     forward_bcs_(params.GetParam("forward_bcs")),
     detector_bndrys_(params.GetParamVectorValue<std::string>("detector_boundaries")),
-    num_func_evals_(0),
+    num_transport_solves_(0),
     max_its_(params.GetParamValue<unsigned>("max_its")),
     tol_(params.GetParamValue<double>("tol")),
     alpha_(params.GetParamValue<double>("alpha")),
     line_search_(params.GetParamValue<bool>("line_search")),
-    max_ls_its_(params.GetParamValue<unsigned>("max_ls_its"))
+    max_ls_its_(params.GetParamValue<unsigned>("max_ls_its")),
+    use_tao_(params.GetParamValue<bool>("use_tao"))
 {
   const auto user_params = params.ParametersAtAssignment();
 
@@ -83,18 +153,44 @@ InverseSolver::InverseSolver(const InputParameters& params)
                          "specified material IDs.");
 
     // Set the initial guess
-    VecCreate(opensn::mpi_comm, &x_);
-    VecSetType(x_, VECSTANDARD);
-    VecSetSizes(x_, material_ids_.size(), PETSC_DECIDE);
+    VecCreate(opensn::mpi_comm, &solution_);
+    VecSetType(solution_, VECSTANDARD);
+    VecSetSizes(solution_, material_ids_.size(), PETSC_DECIDE);
 
     double* rho;
-    VecGetArray(x_, &rho);
+    VecGetArray(solution_, &rho);
     for (PetscInt i = 0; i < material_ids_.size(); ++i)
       rho[i] = initial_guess[i];
-    VecRestoreArray(x_, &rho);
+    VecRestoreArray(solution_, &rho);
+
+    // Create the gradient vector
+    VecDuplicate(solution_, &gradient_);
+    VecSet(gradient_, 0.0);
+
+    if (use_tao_)
+    {
+      TaoCreate(opensn::mpi_comm, &tao_);
+      TaoSetType(tao_, TAOBLMVM);
+      TaoSetSolution(tao_, solution_);
+      TaoSetApplicationContext(tao_, this);
+      TaoSetObjectiveAndGradient(tao_, gradient_, __EvaluateObjectiveAndGradient, this);
+      TaoSetMonitor(tao_, __Monitor, this, NULL);
+
+      TaoSetMaximumIterations(tao_, max_its_);
+      TaoSetTolerances(tao_, tol_, tol_, tol_);
+      TaoSetFromOptions(tao_);
+    }
   }
   else
     OpenSnLogicalError("Only material ID-based problems are implemented.");
+}
+
+InverseSolver::~InverseSolver()
+{
+  VecDestroy(&solution_);
+  VecDestroy(&gradient_);
+  if (use_tao_)
+    TaoDestroy(&tao_);
 }
 
 void
@@ -128,27 +224,46 @@ InverseSolver::Initialize()
   log.Log() << "\n";
 
   // Set densities to the initial guess
-  SetDensities(x_);
+  SetDensities(solution_);
 }
 
 void
 InverseSolver::Execute()
 {
+  if (use_tao_)
+    ExecuteTao();
+  else
+    ExecuteSimple();
+
+  log.Log() << "\n********** Inverse Solver Summary **********";
+  log.Log() << "Solution:            " << VecString(solution_);
+  log.Log() << "# Transport Solves:  " << num_transport_solves_;
+  log.Log() << "\n";
+}
+
+void
+InverseSolver::ExecuteTao()
+{
+  TaoSolve(tao_);
+  log.Log() << "\n********** Tao Solver Summary **********";
+  TaoView(tao_, PETSC_VIEWER_STDOUT_WORLD);
+  log.Log() << "\n";
+}
+
+void
+InverseSolver::ExecuteSimple()
+{
   // Bookkeeping
-  Vec df;
-  VecDuplicate(x_, &df);
-  VecSet(df, 0.0);
+  VecDuplicate(solution_, &gradient_);
+  VecSet(gradient_, 0.0);
 
   // Start iterations
-  double f = 0.0;
-  double alpha = alpha_;
-  double grad_norm = 0.0;
+  double f, alpha;
   for (int nit = 0; nit < max_its_; ++nit)
   {
-    EvaluateObjectiveAndGradient(x_, &f, df);
-    alpha = line_search_ ? BackTrackingLineSearch(x_, alpha_, df, f) : alpha_;
-    VecNorm(df, NORM_2, &grad_norm);
-    VecAXPY(x_, -alpha, df);
+    EvaluateObjectiveAndGradient(solution_, &f, gradient_);
+    alpha = line_search_ ? BackTrackingLineSearch(solution_, alpha_, gradient_, f) : alpha_;
+    VecAXPY(solution_, -alpha, gradient_);
 
     if (nit == 0)
       log.Log() << "********** Iteration Summary **********";
@@ -158,51 +273,46 @@ InverseSolver::Execute()
     ss << "Iteration " << std::right << std::setw(4) << nit << "  ";
     ss << "Obj  " << std::right << std::setw(12) << f << "  ";
     ss << "Alpha  " << std::right << std::setw(12) << alpha << "  ";
-    ss << "Solution  " << VecString(x_) << "  ";
-    ss << "Gradient  " << VecString(df) << (f < tol_ ? "    CONVERGED" : "");
+    ss << "Solution  " << VecString(solution_) << "  ";
+    ss << "Gradient  " << VecString(gradient_) << (f < tol_ ? "    CONVERGED" : "");
     log.Log() << ss.str();
 
     if (f < tol_)
       break;
   }
-  log.Log() << "\n***** Obj Func Evaluations:  " << num_func_evals_;
+  log.Log() << "\n********** " << num_transport_solves_ << " transport solves";
+  log.Log() << "\n";
 }
 
 PetscErrorCode
 InverseSolver::EvaluateObjective(Vec x, PetscReal* f)
 {
-  ++num_func_evals_;
-
   // Solve the forward problem
   SetDensities(x);
   solver_.SetOptions(GetForwardOptions());
   ExecuteSteadyState();
 
   // Evaluate the objective function
-  double val = 0.0;
+  *f = 0.0;
   const auto leakage = ComputeDetectorSignal();
   for (int i = 0; i < leakage.size(); ++i)
-    val += leakage[i] - ref_leakage_[i];
-  *f = 0.5 * val * val;
+    *f += 0.5 * std::pow(leakage[i] - ref_leakage_[i], 2.0);
   return 0;
 }
 
 PetscErrorCode
 InverseSolver::EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df)
 {
-  ++num_func_evals_;
-
   // Solve the forward problem
   SetDensities(x);
   solver_.SetOptions(GetForwardOptions());
   ExecuteSteadyState();
 
   // Evaluate the objective function
-  double val = 0.0;
+  *f = 0.0;
   const auto leakage = ComputeDetectorSignal();
   for (int i = 0; i < leakage.size(); ++i)
-    val += leakage[i] - ref_leakage_[i];
-  *f = 0.5 * val * val;
+    *f += 0.5 * std::pow(leakage[i] - ref_leakage_[i], 2.0);
 
   // Get data for the inner product
   const auto phi_fwd = solver_.PhiNewLocal();
@@ -215,7 +325,24 @@ InverseSolver::EvaluateObjectiveAndGradient(Vec x, PetscReal* f, Vec df)
 
   // Compute the gradient
   ComputeInnerProduct(phi_fwd, psi_fwd, psi_adj, df);
+  return 0;
+}
 
+PetscErrorCode
+InverseSolver::Monitor() const
+{
+  Vec x, g;
+  PetscInt its;
+  PetscReal f, gnorm, cnorm, xdiff;
+  TaoConvergedReason reason;
+
+  TaoGetSolution(tao_, &x);
+  TaoGetGradient(tao_, &g, NULL, NULL);
+  TaoGetSolutionStatus(tao_, &its, &f, &gnorm, &cnorm, &xdiff, &reason);
+
+  log.Log() << its << ",  Function Value: " << f << ",  Gradient Norm: " << gnorm
+            << ",  Step Length: " << xdiff << ",  Solution: " << VecString(x)
+            << ",  Gradient: " << VecString(g);
   return 0;
 }
 
@@ -283,8 +410,9 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
       // Get cell data
       const auto& cell_mapping = discretization.GetCellMapping(cell);
       const auto& transport_view = transport_views[cell.local_id_];
-      const auto& fe_values = unit_cell_matrices[cell.local_id_];
-      const auto& xs = transport_view.XS();
+      const auto& mass_matrix = unit_cell_matrices[cell.local_id_].intV_shapeI_shapeJ;
+      const auto num_cell_nodes = cell_mapping.NumNodes();
+      const auto& xs = transport_views[cell.local_id_].XS();
       const auto& rho =
         material_ids_.empty() ? solver_.DensitiesLocal()[cell.local_id_] : xs.ScalingFactor();
 
@@ -294,60 +422,66 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
       const auto& F = xs.ProductionMatrix();
 
       // Loop over cell nodes
-      const auto num_cell_nodes = cell_mapping.NumNodes();
+      double val = 0.0;
       for (int i = 0; i < num_cell_nodes; ++i)
       {
-        const auto& V = fe_values.intV_shapeI[i];
-
-        // Loop over groupset groups
-        for (int gsg = 0; gsg < num_gs_groups; ++gsg)
+        for (int j = 0; j < num_cell_nodes; ++j)
         {
-          const auto g = first_gs_group + gsg;
-          const auto& sig_t = sigma_t[g];
+          const auto m_ij = mass_matrix[i][j];
 
-          // Precompute source moments
-          std::vector<double> q_mom(num_moments, 0.0);
-          for (int m = 0; m < num_moments; ++m)
+          // Loop over groupset groups
+          for (int gsg = 0; gsg < num_gs_groups; ++gsg)
           {
-            const auto ell = moment_map[m].ell;
-            const auto uk_map = transport_view.MapDOF(i, m, 0);
+            const auto g = first_gs_group + gsg;
+            const auto& sig_t = sigma_t[g] / rho;
 
-            // Scattering
-            double s = 0.0;
-            if (ell < S.size())
-              for (const auto& [_, gp, sig_ell] : S[ell].Row(g))
-                s += sig_ell * phi_fwd[uk_map + gp];
-
-            // Fission
-            double f = 0.0;
-            unsigned gp = 0;
-            if (xs.IsFissionable() and ell == 0)
-              for (const auto& sig_f : F[g])
-                f += sig_f * phi_fwd[uk_map + gp++];
-
-            // Accumumlate source moment
-            q_mom[m] = s + f;
-          } // for moment
-
-          // Angular integration
-          for (int d = 0; d < num_gs_dirs; ++d)
-          {
-            const auto w = weights[d] * V;
-            const auto dof = discretization.MapDOF(cell, i, uk_man, d, gsg);
-
-            // Apply moment-to-discrete operator to source moments
-            double q_dir = 0.0;
+            // Precompute source moments
+            std::vector<double> q_mom(num_moments, 0.0);
             for (int m = 0; m < num_moments; ++m)
-              q_dir += m2d[m][d] * q_mom[m];
+            {
+              const auto ell = moment_map[m].ell;
+              const auto uk_map = transport_view.MapDOF(j, m, 0);
 
-            // Inner product contribution
-            const auto val = w * psi_adj[gs][dof] * (sig_t * psi_fwd[gs][dof] - q_dir) / rho;
-            VecSetValueLocal(df, idx, -val, ADD_VALUES);
-          } // for direction
-        }   // for group
-      }     // for node
-    }       // for cell
-  }         // for groupset
+              // Scattering
+              double s = 0.0;
+              if (ell < S.size())
+                for (const auto& [_, gp, sig_ell] : S[ell].Row(g))
+                  s += sig_ell * phi_fwd[uk_map + gp];
+
+              // Fission
+              double f = 0.0;
+              unsigned gp = 0;
+              if (xs.IsFissionable() and ell == 0)
+                for (const auto& sig_f : F[g])
+                  f += sig_f * phi_fwd[uk_map + gp++];
+
+              // Accumumlate source moment
+              q_mom[m] = (s + f) / rho;
+            } // for moment
+
+            // Angular integration
+            for (int d = 0; d < num_gs_dirs; ++d)
+            {
+              const auto w = weights[d] * m_ij;
+              const auto dof_adj = discretization.MapDOF(cell, i, uk_man, d, gsg);
+              const auto dof_fwd = discretization.MapDOF(cell, j, uk_man, d, gsg);
+
+              // Apply moment-to-discrete operator to source moments
+              double q_dir = 0.0;
+              for (int m = 0; m < num_moments; ++m)
+                q_dir += m2d[m][d] * q_mom[m];
+
+              // Inner product contribution
+              val += w * psi_adj[gs][dof_adj] * (sig_t * psi_fwd[gs][dof_fwd] - q_dir);
+            } // for direction
+          }   // for group g
+        }     // for node j
+      }       // for node i
+
+      VecSetValue(df, idx, -val, ADD_VALUES);
+
+    } // for cell
+  }   // for groupset
 
   VecAssemblyBegin(df);
   VecAssemblyEnd(df);
@@ -376,6 +510,8 @@ InverseSolver::BackTrackingLineSearch(Vec x, double alpha0, Vec df, double f0)
       return alpha;
     alpha *= 0.5;
   }
+
+  VecDestroy(&xp);
   return alpha;
 }
 
@@ -448,8 +584,10 @@ InverseSolver::GetAdjointOptions(const std::vector<PetscReal>& leakage) const
 }
 
 void
-InverseSolver::ExecuteSteadyState() const
+InverseSolver::ExecuteSteadyState()
 {
+  ++num_transport_solves_;
+
   auto& ags_solver = *solver_.GetPrimaryAGSSolver();
   ags_solver.Setup();
   ags_solver.Solve();
@@ -470,7 +608,6 @@ InverseSolver::VecString(Vec x)
   const double* ptr;
 
   std::stringstream ss;
-  ss.flags(std::ios::scientific);
   ss.precision(6);
 
   VecGetLocalSize(x, &n);

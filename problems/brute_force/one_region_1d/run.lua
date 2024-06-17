@@ -27,11 +27,11 @@ mesh.SetUniformMaterialID(0)
 -- Create cross sections
 micro_xs = xs.Create()
 xs.Set(micro_xs, SIMPLE_ONE_GROUP, 1.0, 0.25)
+macro_xs = xs.MakeScaled(micro_xs, 1.0)
 
 -- Create materials
-materials = {}
-materials[1] = mat.AddMaterial("Background")
-mat.AddProperty(materials[1], TRANSPORT_XSECTIONS, micro_xs)
+material = mat.AddMaterial("Background")
+mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
 -- Setup physics
 quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
@@ -63,9 +63,6 @@ lbs_block = {
 }
 
 -- Run reference
-macro_xs = xs.MakeCombined({ { micro_xs, 1.0 } })
-mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
-
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
@@ -83,8 +80,8 @@ for i = 1, num_runs do
     density = min_density + (i - 1) * drho
 
     -- Set the macroscopic cross sections
-    macro_xs = xs.MakeCombined({ { micro_xs, density } })
-    mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs)
+    xs.SetScalingFactor(macro_xs, density)
+    mat.SetProperty(material, TRANSPORT_XSECTIONS, EXISTING, macro_xs)
 
     -- Create the solver
     solver.Initialize(ss_solver)
