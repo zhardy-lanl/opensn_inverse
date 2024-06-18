@@ -89,8 +89,8 @@ materials[2] = mat.AddMaterial("Fuel")
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
-if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 16)
-else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 32)
+else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 8)
 end
 
 forward_bcs = {
@@ -126,9 +126,9 @@ phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax" },
-    material_ids = { 1 },
-    initial_guess = { 4.8 },
+    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax", "ymin" },
+    material_ids = { 0, 1 },
+    initial_guess = { 1.1 * rho1, 0.95 * rho2 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,

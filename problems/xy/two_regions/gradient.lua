@@ -21,7 +21,7 @@ num_groups = 1
 
 rho1 = 1.1
 rho2 = 4.8
-eps = 1.0e-6
+eps = 0.0001
 
 -- Setup mesh
 x_nodes = {}
@@ -84,8 +84,9 @@ materials[2] = mat.AddMaterial("Fuel")
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
 -- Setup physics
-quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
-
+if dim == 1 then quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE, 32)
+else quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 8)
+end
 lbs_block = {
     num_groups = num_groups,
     groupsets = {
@@ -106,7 +107,7 @@ lbs_block = {
             {
                 name = "xmin",
                 type = "isotropic",
-                group_strength = { 1.0 }
+                group_strength = { src }
             }
         }
     }
@@ -118,14 +119,14 @@ ss_solver = lbs.SteadyStateSolver.Create({ lbs_solver_handle = phys })
 
 solver.Initialize(ss_solver)
 solver.Execute(ss_solver)
-reference = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+reference = lbs.ComputeLeakage(phys, { "xmax", "ymax", "ymin" })
 
 -- Compute base objective function
 xs.SetScalingFactor(macro_xs[1], rho1)
 xs.SetScalingFactor(macro_xs[2], rho2)
 
 solver.Execute(ss_solver)
-leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax", "ymin" })
 
 f_nom = 0.0
 for key, val in pairs(reference) do
@@ -138,7 +139,7 @@ xs.SetScalingFactor(macro_xs[1], rho1 + eps)
 xs.SetScalingFactor(macro_xs[2], rho2)
 
 solver.Execute(ss_solver)
-leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax", "ymin" })
 
 f1 = 0.0
 for key, val in pairs(reference) do
@@ -150,7 +151,7 @@ xs.SetScalingFactor(macro_xs[1], rho1)
 xs.SetScalingFactor(macro_xs[2], rho2 + eps)
 
 solver.Execute(ss_solver)
-leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax" })
+leakage = lbs.ComputeLeakage(phys, { "xmax", "ymax", "ymin" })
 
 f2 = 0.0
 for key, val in pairs(reference) do
