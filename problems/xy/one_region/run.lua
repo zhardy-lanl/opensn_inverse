@@ -18,8 +18,9 @@ dz = Z / N_z
 if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
-if tol == nil then tol = 1.0e-8 end
+if tol == nil then tol = 1.0e-12 end
 if line_search == nil then line_search = true end
+if cellwise == nil then cellwise = false end
 
 num_groups = 1
 sigma_t = 1.0
@@ -69,7 +70,7 @@ end
 
 forward_bcs = {
     {
-        name = dim == 1 and "zmin" or "xmin",
+        name = dim == 1 and "zmin" or "ymin",
         type = "isotropic",
         group_strength = { src }
     }
@@ -96,19 +97,21 @@ lbs_block = {
 }
 
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
+solver.Initialize(phys)
 
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "xmin", "ymax", "xmax" },
     material_ids = { 0 },
-    initial_guess = { 2.1 },
+    initial_guess = { 2.05 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
     alpha = alpha,
     line_search = line_search,
-    use_tao = true
+    use_tao = true,
+    cellwise = cellwise
 }
 
 inv_solver = lbs.InverseSolver.Create(inverse_options)

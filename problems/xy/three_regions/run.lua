@@ -4,8 +4,8 @@
 if X == nil then X = 5.0 end
 if Y == nil then Y = 5.0 end
 
-if N_x == nil then N_x = 20 end
-if N_y == nil then N_y = 20 end
+if N_x == nil then N_x = 40 end
+if N_y == nil then N_y = 40 end
 
 dx = X / N_x
 dy = Y / N_y
@@ -13,8 +13,14 @@ dy = Y / N_y
 if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
-if tol == nil then tol = 1.0e-8 end
+if tol == nil then tol = 1.0e-12 end
 if line_search == nil then line_search = true end
+if cellwise == nil then cellwise = false end
+
+
+if rho0 == nil then rho0 = 0.5 end
+if rho1 == nil then rho1 = 2.0 end
+if rho2 == nil then rho2 = 5.0 end
 
 num_groups = 1
 
@@ -34,31 +40,31 @@ nodes = { x_nodes, y_nodes }
 orthomesh = mesh.OrthogonalMeshGenerator.Create({ node_sets = nodes })
 mesh.MeshGenerator.Execute(orthomesh)
 
-vol_heavy = logvol.RPPLogicalVolume.Create({ xmin = 0.2 * X, xmax = 0.4 * X,
-                                             ymin = 0.6 * Y, ymax = 0.8 * Y,
+vol_light = logvol.RPPLogicalVolume.Create({ xmin = 0.5 * X, xmax = 0.9 * X,
+                                             ymin = 0.1 * Y, ymax = 0.5 * Y,
                                              infz = true })
-vol_light = logvol.RPPLogicalVolume.Create({ xmin = 0.6 * X, xmax = 0.8 * X,
-                                             ymin = 0.2 * Y, ymax = 0.4 * Y,
+vol_heavy = logvol.RPPLogicalVolume.Create({ xmin = 0.1 * X, xmax = 0.5 * X,
+                                             ymin = 0.5 * Y, ymax = 0.9 * Y,
                                              infz = true })
 
 -- Material IDs
 mesh.SetUniformMaterialID(0)
-mesh.SetMaterialIDFromLogicalVolume(vol_heavy, 1)
-mesh.SetMaterialIDFromLogicalVolume(vol_light, 2)
+mesh.SetMaterialIDFromLogicalVolume(vol_light, 1)
+mesh.SetMaterialIDFromLogicalVolume(vol_heavy, 2)
 
 -- Create cross sections
 macro_xs = {}
 macro_xs[1] = xs.Create()
 xs.Set(macro_xs[1], OPENSN_XSFILE, "background.xs")
-xs.SetScalingFactor(macro_xs[1], 1.0)
+xs.SetScalingFactor(macro_xs[1], rho0)
 
 macro_xs[2] = xs.Create()
-xs.Set(macro_xs[2], OPENSN_XSFILE, "heavy_fuel.xs")
-xs.SetScalingFactor(macro_xs[2], 5.0)
+xs.Set(macro_xs[2], OPENSN_XSFILE, "light_fuel.xs")
+xs.SetScalingFactor(macro_xs[2], rho1)
 
 macro_xs[3] = xs.Create()
-xs.Set(macro_xs[3], OPENSN_XSFILE, "light_fuel.xs")
-xs.SetScalingFactor(macro_xs[3], 2.0)
+xs.Set(macro_xs[3], OPENSN_XSFILE, "heavy_fuel.xs")
+xs.SetScalingFactor(macro_xs[3], rho2)
 
 -- Create materials
 materials = {}
@@ -66,18 +72,18 @@ materials = {}
 materials[1] = mat.AddMaterial("Background")
 mat.SetProperty(materials[1], TRANSPORT_XSECTIONS, EXISTING, macro_xs[1])
 
-materials[2] = mat.AddMaterial("Heavy Fuel")
+materials[2] = mat.AddMaterial("Light Fuel")
 mat.SetProperty(materials[2], TRANSPORT_XSECTIONS, EXISTING, macro_xs[2])
 
-materials[3] = mat.AddMaterial("Light Fuel")
+materials[3] = mat.AddMaterial("Heavy Fuel")
 mat.SetProperty(materials[3], TRANSPORT_XSECTIONS, EXISTING, macro_xs[3])
 
 -- Setup physics
-quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 4)
+quad = aquad.CreateProductQuadrature(GAUSS_LEGENDRE_CHEBYSHEV, 4, 8)
 
 forward_bcs = {
     {
-        name = "xmin",
+        name = "ymin",
         type = "isotropic",
         group_strength = { src }
     }
@@ -104,18 +110,20 @@ lbs_block = {
 }
 
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
+solver.Initialize(phys)
 
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = { "xmax", "ymax" },
+    detector_boundaries = { "xmin", "ymax", "xmax" },
     material_ids = { 1, 2 },
-    initial_guess = { 4.2, 2.4 },
+    initial_guess = { 0.9 * rho1, 0.9 * rho2 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
     alpha = alpha,
     line_search = line_search,
-    use_tao = true
+    use_tao = true,
+    cellwise = cellwise
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 solver.Initialize(inv_solver)

@@ -2,6 +2,8 @@
 #include "opensn/modules/linear_boltzmann_solvers/discrete_ordinates_solver/lbs_discrete_ordinates_solver.h"
 #include "opensn/modules/linear_boltzmann_solvers/lbs_solver/iterative_methods/ags_linear_solver.h"
 #include "opensn/framework/mesh/mesh_continuum/mesh_continuum.h"
+#include "opensn/framework/math/spatial_discretization/finite_volume/finite_volume.h"
+#include "opensn/framework/field_functions/field_function_grid_based.h"
 #include "opensn/framework/materials/multi_group_xs/multi_group_xs.h"
 #include "opensn/framework/logging/log.h"
 #include "opensn/framework/runtime.h"
@@ -9,7 +11,7 @@
 #include <numeric>
 #include <iomanip>
 
-namespace opensn::lbs
+namespace opensn
 {
 
 std::string
@@ -87,7 +89,7 @@ InverseSolver::GetInputParameters()
 {
   auto params = Solver::GetInputParameters();
 
-  params.SetGeneralDescription("An inverse solver for material density reconstruction.");
+  params.SetGeneralDescription("An inverse solver for density reconstruction.");
   params.ChangeExistingParamToOptional("name", "LBSInverseDataBlock");
 
   params.AddRequiredParameter<size_t>("lbs_solver_handle", "A handle to an LBS solver.");
@@ -103,9 +105,11 @@ InverseSolver::GetInputParameters()
   params.AddOptionalParameter(
     "material_ids", std::vector<int>(), "The material IDs with unknown densities.");
   params.AddOptionalParameter(
-    "initial_guess", std::vector<double>(), "An initial guess for material ID-based densities.");
+    "initial_guess", std::vector<double>(), "An initial guess for material-based densities.");
   params.AddOptionalParameter(
     "initial_guess_file", "", "A file with the initial guess for cell-based densities.");
+  params.AddOptionalParameter(
+    "cellwise", false, "A flag to solve the inverse problem for cell-wise densities.");
 
   params.AddOptionalParameter("max_its", 20, "The maximum number of iterations.");
   params.AddOptionalParameter("tol", 1.0e-8, "The convergence tolerance.");
@@ -135,54 +139,76 @@ InverseSolver::InverseSolver(const InputParameters& params)
     alpha_(params.GetParamValue<double>("alpha")),
     line_search_(params.GetParamValue<bool>("line_search")),
     max_ls_its_(params.GetParamValue<unsigned>("max_ls_its")),
-    use_tao_(params.GetParamValue<bool>("use_tao"))
+    use_tao_(params.GetParamValue<bool>("use_tao")),
+    cellwise_(params.GetParamValue<bool>("cellwise"))
 {
   const auto user_params = params.ParametersAtAssignment();
 
   // Check boundary condition options
   forward_bcs_.RequireBlockTypeIs(ParameterBlockType::ARRAY);
 
-  // Material ID-based problem
+  // Initial guess set from material IDs
   if (user_params.Has("material_ids"))
   {
+    user_params.RequireParameter("material_ids");
     user_params.RequireParameter("initial_guess");
+
     material_ids_ = user_params.GetParamVectorValue<int>("material_ids");
     const auto initial_guess = user_params.GetParamVectorValue<double>("initial_guess");
     OpenSnLogicalErrorIf(initial_guess.size() != material_ids_.size(),
                          "The initial guess must have the same number of entries as the "
                          "specified material IDs.");
 
+    // Define the initial guess vector. If cell-wise, map the material-based densities to
+    // a vector of densities for cells containing the given materials.
+    std::vector<double> rho0(initial_guess);
+    if (cellwise_)
+    {
+      rho0.clear();
+      for (const auto& cell : GetCurrentMesh()->local_cells)
+      {
+        const auto& it = std::find(material_ids_.begin(), material_ids_.end(), cell.material_id_);
+        if (it != material_ids_.end())
+        {
+          cell_local_ids_.push_back(cell.local_id_);
+          rho0.push_back(initial_guess[it - material_ids_.begin()]);
+        }
+      }
+    }
+
     // Set the initial guess
     VecCreate(opensn::mpi_comm, &solution_);
     VecSetType(solution_, VECSTANDARD);
-    VecSetSizes(solution_, material_ids_.size(), PETSC_DECIDE);
+    VecSetSizes(solution_, rho0.size(), PETSC_DECIDE);
 
-    double* rho;
-    VecGetArray(solution_, &rho);
-    for (PetscInt i = 0; i < material_ids_.size(); ++i)
-      rho[i] = initial_guess[i];
-    VecRestoreArray(solution_, &rho);
+    double* val;
+    VecGetArray(solution_, &val);
+    for (PetscInt i = 0; i < rho0.size(); ++i)
+      val[i] = rho0[i];
+    VecRestoreArray(solution_, &val);
 
     // Create the gradient vector
     VecDuplicate(solution_, &gradient_);
     VecSet(gradient_, 0.0);
-
-    if (use_tao_)
-    {
-      TaoCreate(opensn::mpi_comm, &tao_);
-      TaoSetType(tao_, TAOBLMVM);
-      TaoSetSolution(tao_, solution_);
-      TaoSetApplicationContext(tao_, this);
-      TaoSetObjectiveAndGradient(tao_, gradient_, __EvaluateObjectiveAndGradient, this);
-      TaoSetMonitor(tao_, __Monitor, this, NULL);
-
-      TaoSetMaximumIterations(tao_, max_its_);
-      TaoSetTolerances(tao_, tol_, tol_, tol_);
-      TaoSetFromOptions(tao_);
-    }
   }
   else
-    OpenSnLogicalError("Only material ID-based problems are implemented.");
+  {
+    throw std::invalid_argument("Only material-based initialization is implemented.");
+  }
+
+  if (use_tao_)
+  {
+    TaoCreate(opensn::mpi_comm, &tao_);
+    TaoSetType(tao_, TAOBLMVM);
+    TaoSetSolution(tao_, solution_);
+    TaoSetApplicationContext(tao_, this);
+    TaoSetObjectiveAndGradient(tao_, gradient_, __EvaluateObjectiveAndGradient, this);
+    TaoSetMonitor(tao_, __Monitor, this, NULL);
+
+    TaoSetMaximumIterations(tao_, max_its_);
+    TaoSetTolerances(tao_, tol_, tol_, tol_);
+    TaoSetFromOptions(tao_);
+  }
 }
 
 InverseSolver::~InverseSolver()
@@ -196,8 +222,6 @@ InverseSolver::~InverseSolver()
 void
 InverseSolver::Initialize()
 {
-  solver_.Initialize();
-
   // Check for invalid material IDs
   if (not material_ids_.empty())
     for (const auto& matid : material_ids_)
@@ -210,7 +234,8 @@ InverseSolver::Initialize()
   for (const auto& bname : detector_bndrys_)
     detector_bids_.push_back(solver_.supported_boundary_names.at(bname));
 
-  // Generate the measured signal to reconstruct
+  // Generate the measured signal to reconstruct.
+  // NOTE The densities in the solver should be set to the nominal solution at this point.
   solver_.SetOptions(GetForwardOptions());
   ExecuteSteadyState();
   ref_leakage_ = ComputeDetectorSignal();
@@ -224,7 +249,11 @@ InverseSolver::Initialize()
   log.Log() << "\n";
 
   // Set densities to the initial guess
-  SetDensities(solution_);
+  SetDensities(solution_, true);
+
+  // Reset xs to microscopic
+  for (const auto& [matid, xs] : solver_.GetMatID2XSMap())
+    std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(1.0);
 }
 
 void
@@ -239,6 +268,9 @@ InverseSolver::Execute()
   log.Log() << "Solution:            " << VecString(solution_);
   log.Log() << "# Transport Solves:  " << num_transport_solves_;
   log.Log() << "\n";
+
+  SetDensities(solution_);
+  ExportDensity();
 }
 
 void
@@ -332,17 +364,22 @@ PetscErrorCode
 InverseSolver::Monitor() const
 {
   Vec x, g;
-  PetscInt its;
+  PetscInt its, n;
   PetscReal f, gnorm, cnorm, xdiff;
   TaoConvergedReason reason;
 
   TaoGetSolution(tao_, &x);
+  VecGetLocalSize(x, &n);
   TaoGetGradient(tao_, &g, NULL, NULL);
   TaoGetSolutionStatus(tao_, &its, &f, &gnorm, &cnorm, &xdiff, &reason);
 
-  log.Log() << its << ",  Function Value: " << f << ",  Gradient Norm: " << gnorm
-            << ",  Step Length: " << xdiff << ",  Solution: " << VecString(x)
-            << ",  Gradient: " << VecString(g);
+  std::stringstream ss;
+  ss << its << ",  Function Value: " << f << ",  Gradient Norm: " << gnorm
+     << ",  Step Length: " << xdiff;
+  if (n <= 10)
+    ss << ",  Solution: " << VecString(x) << ",  Gradient: " << VecString(g);
+  log.Log() << ss.str();
+
   return 0;
 }
 
@@ -393,19 +430,9 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
     for (const auto& cell : grid.local_cells)
     {
       // Default to cell-wise index
-      int64_t idx = cell.local_id_;
-
-      // Remap the index for material-wise densities
-      if (not material_ids_.empty())
-      {
-        // Skip this cell if not an unknown material density
-        const auto it = std::find(material_ids_.begin(), material_ids_.end(), cell.material_id_);
-        if (it == material_ids_.end())
-          continue;
-
-        // Define the new index
-        idx = it - material_ids_.begin();
-      }
+      const auto idx = GetIndex(cell);
+      if (idx < 0)
+        continue;
 
       // Get cell data
       const auto& cell_mapping = discretization.GetCellMapping(cell);
@@ -413,8 +440,7 @@ InverseSolver::ComputeInnerProduct(const std::vector<double>& phi_fwd,
       const auto& mass_matrix = unit_cell_matrices[cell.local_id_].intV_shapeI_shapeJ;
       const auto num_cell_nodes = cell_mapping.NumNodes();
       const auto& xs = transport_views[cell.local_id_].XS();
-      const auto& rho =
-        material_ids_.empty() ? solver_.DensitiesLocal()[cell.local_id_] : xs.ScalingFactor();
+      const auto& rho = cellwise_ ? solver_.DensitiesLocal()[cell.local_id_] : xs.ScalingFactor();
 
       // Get xs data
       const auto& sigma_t = xs.SigmaTotal();
@@ -516,24 +542,42 @@ InverseSolver::BackTrackingLineSearch(Vec x, double alpha0, Vec df, double f0)
 }
 
 void
-InverseSolver::SetDensities(Vec x)
+InverseSolver::SetDensities(Vec x, const bool init)
 {
   int64_t n;
   VecGetLocalSize(x, &n);
 
-  // Material ID-based densities
-  if (not material_ids_.empty())
-  {
-    OpenSnLogicalErrorIf(n != material_ids_.size(), "Vector size mismatch.");
+  if (cellwise_ and n != cell_local_ids_.size())
+    throw std::logic_error("Vector size mismatch.");
+  if (not cellwise_ and n != material_ids_.size())
+    throw std::logic_error("Vector size mismatch.");
 
-    const double* ptr;
-    VecGetArrayRead(x, &ptr);
-    for (int i = 0; i < n; ++i)
-    {
-      auto& xs = solver_.GetMatID2XSMap().at(material_ids_.at(i));
-      std::dynamic_pointer_cast<MultiGroupXS>(xs)->SetScalingFactor(*ptr++);
-    }
-    VecRestoreArrayRead(x, &ptr);
+  const double* val;
+  VecGetArrayRead(x, &val);
+  auto& densities = solver_.DensitiesLocal();
+  for (const auto& cell : solver_.Grid().local_cells)
+  {
+    const auto idx = GetIndex(cell);
+    if (idx >= 0)
+      densities[cell.local_id_] = val[idx];
+    else if (init)
+      densities[cell.local_id_] = solver_.GetMatID2XSMap().at(cell.material_id_)->ScalingFactor();
+  }
+  VecRestoreArrayRead(x, &val);
+}
+
+int
+InverseSolver::GetIndex(const Cell& cell) const
+{
+  if (not cellwise_)
+  {
+    const auto it = std::find(material_ids_.begin(), material_ids_.end(), cell.material_id_);
+    return it != material_ids_.end() ? it - material_ids_.begin() : -1;
+  }
+  else
+  {
+    const auto it = std::find(cell_local_ids_.begin(), cell_local_ids_.end(), cell.local_id_);
+    return it != cell_local_ids_.end() ? it - cell_local_ids_.begin() : -1;
   }
 }
 
@@ -601,6 +645,21 @@ InverseSolver::ExecuteSteadyState()
   solver_.UpdateFieldFunctions();
 }
 
+void
+InverseSolver::ExportDensity() const
+{
+  const auto& grid = solver_.Grid();
+  const auto& discretization = solver_.SpatialDiscretization();
+  const auto& cs_type = discretization.GetCoordinateSystemType();
+  const auto& density = solver_.DensitiesLocal();
+
+  auto fv = std::dynamic_pointer_cast<SpatialDiscretization>(FiniteVolume::New(grid, cs_type));
+  std::vector<std::shared_ptr<const FieldFunctionGridBased>> ff_list;
+  ff_list.emplace_back(std::make_shared<const FieldFunctionGridBased>(
+    "density", fv, Unknown(UnknownType::SCALAR), density));
+  FieldFunctionGridBased::ExportMultipleToVTK("density", ff_list);
+}
+
 std::string
 InverseSolver::VecString(Vec x)
 {
@@ -621,4 +680,4 @@ InverseSolver::VecString(Vec x)
   return ss.str();
 }
 
-} // namespace opensn::lbs
+} // namespace opensn
