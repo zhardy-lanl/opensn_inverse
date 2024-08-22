@@ -64,6 +64,8 @@ lbs_block = {
         scattering_order = 0,
         save_angular_flux = true,
         verbose_inner_iterations = false,
+        max_ags_iterations = 1,
+        verbose_inner_iterations = false,
         boundary_conditions = forward_bcs
     }
 }

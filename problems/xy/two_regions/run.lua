@@ -7,9 +7,9 @@ if X == nil then X = 5.0 end
 if Y == nil then Y = 5.0 end
 if Z == nil then Z = 5.0 end
 
-if N_x == nil then N_x = 20 end
-if N_y == nil then N_y = 20 end
-if N_z == nil then N_z = 20 end
+if N_x == nil then N_x = 40 end
+if N_y == nil then N_y = 40 end
+if N_z == nil then N_z = 40 end
 
 dx = X / N_x
 dy = Y / N_y
@@ -18,10 +18,11 @@ dz = Z / N_z
 if src == nil then src = 1.0 end
 if alpha == nil then alpha = 1.0 end
 if maxit == nil then maxit = 100 end
-if tol == nil then tol = 1.0e-8 end
+if tol == nil then tol = 1.0e-12 end
 if line_search == nil then line_search = true end
+if cellwise == nil then cellwise = false end
 
-if rho1 == nil then rho1 = 1.0 end
+if rho1 == nil then rho1 = 0.5 end
 if rho2 == nil then rho2 = 5.0 end
 
 if bg == nil then bg = true end
@@ -56,8 +57,8 @@ if dim == 1 then
     vol = logvol.RPPLogicalVolume.Create({ infx = true, infy = true,
                                            zmin = 0.5 * X, zmax = X })
 elseif dim == 2 then
-    vol = logvol.RPPLogicalVolume.Create({ xmin = 0.4 * X, xmax = 0.6 * X,
-                                           ymin = 0.4 * Y, ymax = 0.6 * Y,
+    vol = logvol.RPPLogicalVolume.Create({ xmin = 0.2 * X, xmax = 0.8 * X,
+                                           ymin = 0.2 * Y, ymax = 0.8 * Y,
                                            infz = true })
 else
     vol = logvol.RPPLogicalVolume.Create({ xmin = 0.25 * X, xmax = 0.5 * X,
@@ -95,7 +96,7 @@ end
 
 forward_bcs = {
     {
-        name = dim == 1 and "zmin" or "xmin",
+        name = dim == 1 and "zmin" or "ymin",
         type = "isotropic",
         group_strength = { src }
     }
@@ -116,25 +117,29 @@ lbs_block = {
     options = {
         scattering_order = 0,
         save_angular_flux = true,
+        max_ags_iterations = 1,
         verbose_inner_iterations = false,
+        verbose_ags_iterations = false,
         boundary_conditions = forward_bcs
     }
 }
 
 phys = lbs.DiscreteOrdinatesSolver.Create(lbs_block)
+solver.Initialize(phys)
 
 -- Run inverse solver
 inverse_options = {
     lbs_solver_handle = phys,
-    detector_boundaries = dim == 1 and { "zmax" } or { "xmax", "ymax", "ymin" },
+    detector_boundaries = dim == 1 and { "zmax" } or { "ymin", "ymax" },
     material_ids = { 0, 1 },
-    initial_guess = { 1.1 * rho1, 0.95 * rho2 },
+    initial_guess = { 1.05 * rho1, 0.95 * rho2 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,
     alpha = alpha,
     line_search = line_search,
-    use_tao = true
+    use_tao = true,
+    cellwise = cellwise,
 }
 inv_solver = lbs.InverseSolver.Create(inverse_options)
 solver.Initialize(inv_solver)

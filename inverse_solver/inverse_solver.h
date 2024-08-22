@@ -1,12 +1,13 @@
 #pragma once
 
 #include "opensn/framework/physics/solver_base/solver.h"
+#include "opensn/framework/mesh/cell/cell.h"
 #include <petsctao.h>
 #include <vector>
 #include <map>
 #include <string>
 
-namespace opensn::lbs
+namespace opensn
 {
 class DiscreteOrdinatesSolver;
 
@@ -37,13 +38,16 @@ protected:
                            const std::vector<std::vector<double>>& psi_fwd,
                            const std::vector<std::vector<double>>& psi_adj,
                            Vec df) const;
-
   double BackTrackingLineSearch(Vec x, double alpha0, Vec df, double f0);
-  void SetDensities(Vec x);
+
+  void SetDensities(Vec x, bool init = false);
+  int GetIndex(const Cell& cell) const;
 
   InputParameters GetForwardOptions() const;
   InputParameters GetAdjointOptions(const std::vector<PetscReal>& leakage) const;
   void ExecuteSteadyState();
+
+  void ExportDensity() const;
 
 protected:
   Tao tao_;
@@ -51,6 +55,7 @@ protected:
   Vec gradient_;
 
   std::vector<int> material_ids_;
+  std::vector<uint64_t> cell_local_ids_;
   std::vector<uint64_t> detector_bids_;
   std::vector<double> ref_leakage_;
 
@@ -65,6 +70,7 @@ protected:
   const bool line_search_;
   const unsigned max_ls_its_;
   const bool use_tao_;
+  const bool cellwise_;
 
   unsigned num_transport_solves_;
 
@@ -72,4 +78,4 @@ private:
   static std::string VecString(Vec x);
 };
 
-} // namespace opensn::lbs
+} // namespace opensn
