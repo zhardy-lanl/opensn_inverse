@@ -117,7 +117,9 @@ lbs_block = {
     options = {
         scattering_order = 0,
         save_angular_flux = true,
+        max_ags_iterations = 1,
         verbose_inner_iterations = false,
+        verbose_ags_iterations = false,
         boundary_conditions = forward_bcs
     }
 }
@@ -129,8 +131,8 @@ solver.Initialize(phys)
 inverse_options = {
     lbs_solver_handle = phys,
     detector_boundaries = dim == 1 and { "zmax" } or { "ymin", "ymax" },
-    material_ids = { 1 },
-    initial_guess = { 0.95 * rho2 },
+    material_ids = { 0, 1 },
+    initial_guess = { 1.05 * rho1, 0.95 * rho2 },
     forward_bcs = forward_bcs,
     max_its = maxit,
     tol = tol,

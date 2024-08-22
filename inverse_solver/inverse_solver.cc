@@ -1,6 +1,6 @@
 #include "inverse_solver.h"
 #include "opensn/modules/linear_boltzmann_solvers/discrete_ordinates_solver/lbs_discrete_ordinates_solver.h"
-#include "opensn/modules/linear_boltzmann_solvers/lbs_solver/iterative_methods/ags_linear_solver.h"
+#include "opensn/modules/linear_boltzmann_solvers/lbs_solver/iterative_methods/ags_solver.h"
 #include "opensn/framework/mesh/mesh_continuum/mesh_continuum.h"
 #include "opensn/framework/math/spatial_discretization/finite_volume/finite_volume.h"
 #include "opensn/framework/field_functions/field_function_grid_based.h"
@@ -632,8 +632,7 @@ InverseSolver::ExecuteSteadyState()
 {
   ++num_transport_solves_;
 
-  auto& ags_solver = *solver_.GetPrimaryAGSSolver();
-  ags_solver.Setup();
+  auto& ags_solver = *solver_.GetAGSSolver();
   ags_solver.Solve();
 
   if (solver_.Options().use_precursors)
